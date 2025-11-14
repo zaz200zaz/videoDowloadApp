@@ -99,6 +99,35 @@ class CookieManager:
         cookie_lower = cookie.lower()
         return any(key in cookie_lower for key in common_keys)
     
+    def parse_netscape_cookie_file(self, cookie_file_content: str) -> str:
+        """
+        Parse Netscape format cookie file thành cookie string
+        
+        Args:
+            cookie_file_content: Nội dung file cookie Netscape format
+            
+        Returns:
+            Cookie string dạng "key1=value1; key2=value2; ..."
+        """
+        cookies = []
+        lines = cookie_file_content.strip().split('\n')
+        
+        for line in lines:
+            line = line.strip()
+            # Bỏ qua comment và dòng trống
+            if not line or line.startswith('#'):
+                continue
+            
+            # Netscape format: domain, flag, path, secure, expiration, name, value
+            parts = line.split('\t')
+            if len(parts) >= 7:
+                name = parts[5]
+                value = parts[6]
+                if name and value:
+                    cookies.append(f"{name}={value}")
+        
+        return "; ".join(cookies)
+    
     def get_download_folder(self) -> str:
         """Lấy thư mục tải về"""
         config = self._load_config()
@@ -126,5 +155,43 @@ class CookieManager:
             config["settings"] = {}
         config["settings"][key] = value
         self._save_config(config)
+    
+    def clear_cookie(self) -> bool:
+        """
+        Xóa cookie đã lưu
+        
+        Returns:
+            True nếu xóa thành công
+        """
+        try:
+            config = self._load_config()
+            config["cookie"] = ""
+            self._save_config(config)
+            return True
+        except Exception as e:
+            print(f"Lỗi khi xóa cookie: {e}")
+            return False
+    
+    def reset_all(self) -> bool:
+        """
+        Reset tất cả dữ liệu về trạng thái ban đầu
+        
+        Returns:
+            True nếu reset thành công
+        """
+        try:
+            default_config = {
+                "cookie": "",
+                "download_folder": "./downloads",
+                "settings": {
+                    "naming_mode": "video_id",
+                    "max_concurrent": 3
+                }
+            }
+            self._save_config(default_config)
+            return True
+        except Exception as e:
+            print(f"Lỗi khi reset: {e}")
+            return False
 
 

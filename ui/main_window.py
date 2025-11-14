@@ -74,6 +74,9 @@ class MainWindow:
         self.save_cookie_btn = ttk.Button(cookie_buttons, text="Lưu Cookie", command=self._save_cookie)
         self.save_cookie_btn.pack(side=tk.LEFT, padx=5)
         
+        self.clear_cookie_btn = ttk.Button(cookie_buttons, text="Xóa Cookie", command=self._clear_cookie)
+        self.clear_cookie_btn.pack(side=tk.LEFT, padx=5)
+        
         self.cookie_status_label = ttk.Label(cookie_frame, text="", foreground="gray")
         self.cookie_status_label.grid(row=3, column=0, sticky=tk.W, pady=2)
         
@@ -93,7 +96,7 @@ class MainWindow:
         self.clear_links_btn = ttk.Button(links_buttons, text="Xóa tất cả", command=self._clear_links)
         self.clear_links_btn.pack(side=tk.LEFT, padx=5)
         
-        self.links_text = scrolledtext.ScrolledText(links_frame, height=8, wrap=tk.WORD)
+        self.links_text = scrolledtext.ScrolledText(links_frame, height=8, wrap=tk.WORD, state=tk.NORMAL)
         self.links_text.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         
         ttk.Label(links_frame, text="Mỗi dòng một link video Douyin", foreground="gray").grid(
@@ -151,6 +154,13 @@ class MainWindow:
         # Thống kê
         self.stats_label = ttk.Label(status_frame, text="Tổng: 0 | Thành công: 0 | Thất bại: 0")
         self.stats_label.grid(row=1, column=0, sticky=tk.W, pady=5)
+        
+        # Nút reset
+        reset_buttons = ttk.Frame(status_frame)
+        reset_buttons.grid(row=2, column=0, sticky=tk.W, pady=5)
+        
+        self.reset_btn = ttk.Button(reset_buttons, text="Reset App", command=self._reset_app)
+        self.reset_btn.pack(side=tk.LEFT, padx=5)
     
     def _load_saved_cookie(self):
         """Tải cookie đã lưu vào ô nhập"""
@@ -181,9 +191,18 @@ class MainWindow:
                 messagebox.showwarning("Cảnh báo", "File rỗng!")
                 return
             
-            # Thử parse JSON nếu là file JSON
             cookie_value = content
-            if file_path.lower().endswith('.json'):
+            
+            # Kiểm tra nếu là Netscape cookie format
+            if content.startswith('# Netscape HTTP Cookie File') or ('\t' in content and len(content.split('\t')) >= 7):
+                # Parse Netscape format
+                cookie_value = self.cookie_manager.parse_netscape_cookie_file(content)
+                if not cookie_value:
+                    messagebox.showwarning("Cảnh báo", "Không thể parse Netscape cookie file!")
+                    return
+            
+            # Thử parse JSON nếu là file JSON
+            elif file_path.lower().endswith('.json'):
                 try:
                     import json
                     data = json.loads(content)
@@ -196,6 +215,9 @@ class MainWindow:
                 except json.JSONDecodeError:
                     # Không phải JSON hợp lệ, dùng content gốc
                     pass
+            
+            # Nếu không phải Netscape hoặc JSON, giả sử là Header String format (key1=value1; key2=value2; ...)
+            # Header String format không cần xử lý đặc biệt, dùng trực tiếp
             
             # Xóa nội dung cũ và thêm cookie mới
             self.cookie_text.delete('1.0', tk.END)
@@ -212,8 +234,16 @@ class MainWindow:
             try:
                 with open(file_path, 'r', encoding='latin-1') as f:
                     content = f.read().strip()
+                
+                # Kiểm tra Netscape format
+                if content.startswith('# Netscape HTTP Cookie File') or ('\t' in content and len(content.split('\t')) >= 7):
+                    cookie_value = self.cookie_manager.parse_netscape_cookie_file(content)
+                else:
+                    # Header String format hoặc plain text
+                    cookie_value = content
+                
                 self.cookie_text.delete('1.0', tk.END)
-                self.cookie_text.insert('1.0', content)
+                self.cookie_text.insert('1.0', cookie_value)
                 self.cookie_status_label.config(
                     text=f"✓ Đã tải cookie từ file: {os.path.basename(file_path)}",
                     foreground="green"
@@ -231,6 +261,20 @@ class MainWindow:
         if not cookie:
             messagebox.showwarning("Cảnh báo", "Vui lòng nhập cookie!")
             return
+        
+        # Kiểm tra nếu là Netscape format, tự động convert
+        # Header String format (key1=value1; key2=value2; ...) không cần xử lý đặc biệt
+        if cookie.startswith('# Netscape HTTP Cookie File') or ('\t' in cookie and len(cookie.split('\t')) >= 7):
+            cookie = self.cookie_manager.parse_netscape_cookie_file(cookie)
+            if not cookie:
+                messagebox.showerror("Lỗi", "Không thể parse Netscape cookie file!")
+                return
+            # Cập nhật lại text box với cookie đã convert
+            self.cookie_text.delete('1.0', tk.END)
+            self.cookie_text.insert('1.0', cookie)
+        
+        # Header String format đã sẵn sàng để sử dụng (key1=value1; key2=value2; ...)
+        # Không cần xử lý thêm
         
         if not self.cookie_manager.validate_cookie(cookie):
             result = messagebox.askyesno(
@@ -265,7 +309,64 @@ class MainWindow:
     
     def _clear_links(self):
         """Xóa tất cả link"""
+        self.links_text.config(state=tk.NORMAL)
         self.links_text.delete('1.0', tk.END)
+    
+    def _clear_cookie(self):
+        """Xóa cookie đã lưu"""
+        result = messagebox.askyesno(
+            "Xác nhận",
+            "Bạn có chắc chắn muốn xóa cookie đã lưu không?"
+        )
+        
+        if result:
+            if self.cookie_manager.clear_cookie():
+                # Xóa cookie trong text box
+                self.cookie_text.delete('1.0', tk.END)
+                self.cookie_status_label.config(text="✓ Cookie đã được xóa", foreground="green")
+                messagebox.showinfo("Thành công", "Cookie đã được xóa!")
+            else:
+                messagebox.showerror("Lỗi", "Không thể xóa cookie!")
+    
+    def _reset_app(self):
+        """Reset toàn bộ app về trạng thái ban đầu"""
+        result = messagebox.askyesno(
+            "Xác nhận Reset",
+            "Bạn có chắc chắn muốn reset toàn bộ app về trạng thái ban đầu không?\n\n"
+            "Điều này sẽ:\n"
+            "- Xóa cookie đã lưu\n"
+            "- Reset các settings về mặc định\n"
+            "- Xóa danh sách link video\n"
+            "- Xóa trạng thái tải\n\n"
+            "Thư mục download sẽ không bị xóa."
+        )
+        
+        if result:
+            if self.cookie_manager.reset_all():
+                # Xóa cookie trong text box
+                self.cookie_text.delete('1.0', tk.END)
+                self.cookie_status_label.config(text="", foreground="gray")
+                
+                # Xóa danh sách link
+                self.links_text.config(state=tk.NORMAL)
+                self.links_text.delete('1.0', tk.END)
+                
+                # Reset trạng thái tải
+                self.status_tree.delete(*self.status_tree.get_children())
+                self.stats_label.config(text="Tổng: 0 | Thành công: 0 | Thất bại: 0")
+                self.progress_var.set(0)
+                self.progress_label.config(text="Sẵn sàng")
+                
+                # Reset buttons
+                self.start_btn.config(state=tk.NORMAL)
+                self.stop_btn.config(state=tk.DISABLED)
+                
+                # Đảm bảo links_text có thể nhập được
+                self.links_text.config(state=tk.NORMAL)
+                
+                messagebox.showinfo("Thành công", "App đã được reset về trạng thái ban đầu!")
+            else:
+                messagebox.showerror("Lỗi", "Không thể reset app!")
     
     def _select_folder(self):
         """Chọn thư mục lưu video"""
@@ -280,7 +381,27 @@ class MainWindow:
         if not content:
             return []
         
-        links = [line.strip() for line in content.split('\n') if line.strip()]
+        links = []
+        for line in content.split('\n'):
+            line = line.strip()
+            if not line:
+                continue
+            
+            # Tìm URL trong dòng (có thể có text khác)
+            import re
+            # Tìm URL pattern
+            url_pattern = r'https?://[^\s]+'
+            matches = re.findall(url_pattern, line)
+            if matches:
+                # Lấy URL đầu tiên tìm thấy
+                url = matches[0]
+                # Loại bỏ ký tự đặc biệt ở cuối URL nếu có
+                url = url.rstrip('.,;!?')
+                links.append(url)
+            elif 'douyin.com' in line.lower() or 'v.douyin.com' in line.lower():
+                # Nếu dòng chứa douyin nhưng không match pattern, thử lấy toàn bộ
+                links.append(line)
+        
         return links
     
     def _start_download(self):
