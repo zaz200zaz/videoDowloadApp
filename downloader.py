@@ -10,21 +10,104 @@ import requests
 from typing import Optional, Dict, List
 from urllib.parse import urlparse, parse_qs
 import json
+import logging
+from datetime import datetime
 
 
 class VideoDownloader:
     """Xử lý tải video Douyin"""
     
-    def __init__(self, cookie: str):
+    def __init__(self, cookie: str, log_file: str = None):
         """
         Khởi tạo VideoDownloader
         
         Args:
             cookie: Cookie string để xác thực
+            log_file: Đường dẫn file log (nếu None, sẽ tạo file log tự động)
         """
         self.cookie = cookie
         self.session = requests.Session()
+        
+        # Thiết lập logging
+        self._setup_logging(log_file)
+        
         self._setup_session()
+    
+    def _setup_logging(self, log_file: str = None):
+        """Thiết lập logging"""
+        try:
+            if log_file is None:
+                # Tạo file log với timestamp
+                # Sử dụng __file__ để lấy thư mục của script
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                log_dir = os.path.join(script_dir, "logs")
+                os.makedirs(log_dir, exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                log_file = os.path.join(log_dir, f"douyin_downloader_{timestamp}.log")
+            
+            # Đảm bảo thư mục tồn tại
+            log_dir = os.path.dirname(log_file)
+            os.makedirs(log_dir, exist_ok=True)
+            
+            # Tạo logger
+            self.logger = logging.getLogger('VideoDownloader')
+            self.logger.setLevel(logging.DEBUG)
+            
+            # Xóa các handler cũ
+            self.logger.handlers = []
+            
+            # File handler
+            file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='w')
+            file_handler.setLevel(logging.DEBUG)
+            file_format = logging.Formatter(
+                '%(asctime)s - %(levelname)s - %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            )
+            file_handler.setFormatter(file_format)
+            self.logger.addHandler(file_handler)
+            
+            # Console handler
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.INFO)
+            console_format = logging.Formatter('%(levelname)s - %(message)s')
+            console_handler.setFormatter(console_format)
+            self.logger.addHandler(console_handler)
+            
+            self.log_file_path = log_file
+            self.logger.info(f"Logging initialized. Log file: {log_file}")
+            print(f"[LOG] Log file created: {log_file}")
+        except Exception as e:
+            # Nếu không thể tạo log file, vẫn tiếp tục nhưng không có logging
+            print(f"[WARNING] Không thể tạo log file: {e}")
+            # Tạo logger mặc định (chỉ console)
+            self.logger = logging.getLogger('VideoDownloader')
+            self.logger.setLevel(logging.INFO)
+            self.logger.handlers = []
+            console_handler = logging.StreamHandler()
+            console_handler.setLevel(logging.INFO)
+            self.logger.addHandler(console_handler)
+            self.log_file_path = None
+    
+    def log(self, level: str, message: str):
+        """
+        Ghi log với level cụ thể
+        
+        Args:
+            level: 'debug', 'info', 'warning', 'error', 'critical'
+            message: Nội dung log
+        """
+        if level.lower() == 'debug':
+            self.logger.debug(message)
+        elif level.lower() == 'info':
+            self.logger.info(message)
+        elif level.lower() == 'warning':
+            self.logger.warning(message)
+        elif level.lower() == 'error':
+            self.logger.error(message)
+        elif level.lower() == 'critical':
+            self.logger.critical(message)
+        else:
+            self.logger.info(message)
     
     def _setup_session(self):
         """Thiết lập session với headers và cookie"""
@@ -45,8 +128,10 @@ class VideoDownloader:
         
         # Debug: kiểm tra cookie có được set đúng không
         if len(clean_cookie) > 0:
+            self.log('info', f"Cookie đã được set (length: {len(clean_cookie)})")
             print(f"Cookie đã được set (length: {len(clean_cookie)})")
         else:
+            self.log('warning', "WARNING: Cookie rỗng!")
             print("WARNING: Cookie rỗng!")
     
     def normalize_url(self, url: str) -> Optional[str]:
@@ -167,6 +252,7 @@ class VideoDownloader:
         try:
             video_id = self.extract_video_id(url)
             if not video_id:
+                self.log('error', f"Không thể trích xuất video ID từ URL: {url}")
                 print(f"Không thể trích xuất video ID từ URL: {url}")
                 return None
             
@@ -190,19 +276,25 @@ class VideoDownloader:
             
             # Thử các API endpoint
             for api_url in api_endpoints:
+                self.log('info', f"Đang gọi API: {api_url}")
+                self.log('debug', f"Cookie length: {len(self.cookie)} characters")
                 print(f"Đang gọi API: {api_url}")
                 print(f"Cookie length: {len(self.cookie)} characters")
                 
                 try:
                     response = self.session.get(api_url, timeout=15)
                     
-                    print(f"Response status: {response.status_code}")
+                    self.log('debug', f"Response status: {response.status_code}")
                     content_length = response.headers.get('Content-Length', 'unknown')
+                    self.log('debug', f"Content-Length: {content_length}")
+                    print(f"Response status: {response.status_code}")
                     print(f"Content-Length: {content_length}")
                     
                     if response.status_code == 200:
                         # Kiểm tra response có rỗng không
                         if len(response.text) == 0:
+                            self.log('warning', f"Response rỗng từ endpoint: {api_url}")
+                            self.log('warning', "Có thể cookie không hợp lệ hoặc API đã thay đổi")
                             print(f"Response rỗng từ endpoint: {api_url}")
                             print("Có thể cookie không hợp lệ hoặc API đã thay đổi")
                             continue  # Thử endpoint tiếp theo
@@ -210,20 +302,25 @@ class VideoDownloader:
                         # Thử parse JSON
                         try:
                             data = response.json()
+                            self.log('info', "Đã parse JSON thành công!")
                             print("Đã parse JSON thành công!")
                             break  # Thành công, thoát khỏi loop
                         except json.JSONDecodeError:
+                            self.log('warning', f"Response không phải JSON từ endpoint: {api_url}")
                             print(f"Response không phải JSON từ endpoint: {api_url}")
                             continue
                     else:
+                        self.log('warning', f"Status code không phải 200: {response.status_code}")
                         print(f"Status code không phải 200: {response.status_code}")
                         continue
                 except Exception as e:
+                    self.log('error', f"Lỗi khi gọi API {api_url}: {e}")
                     print(f"Lỗi khi gọi API {api_url}: {e}")
                     continue
             
             # Nếu tất cả API endpoint đều thất bại, thử lấy từ HTML page
             if data is None:
+                self.log('warning', "Tất cả API endpoint đều thất bại, thử lấy từ HTML page...")
                 print("Tất cả API endpoint đều thất bại, thử lấy từ HTML page...")
                 return self._get_video_info_from_html(url, video_id)
             
@@ -939,22 +1036,31 @@ class VideoDownloader:
                     
                     # Extract video URLs
                     for video in data['aweme_list']:
-                        video_url = ""
+                        # Lấy video ID để tạo video page URL (giống như JavaScript code)
+                        aweme_id = video.get('aweme_id', '')
+                        if aweme_id:
+                            # Tạo video page URL thay vì direct video URL
+                            # Vì direct video URL có thể hết hạn, nên dùng video page URL
+                            video_page_url = f"https://www.douyin.com/video/{aweme_id}"
+                            video_urls.append(video_page_url)
+                            print(f"  Thêm video: {video_page_url}")
                         
-                        if video.get('video') and video['video'].get('play_addr'):
-                            url_list = video['video']['play_addr'].get('url_list', [])
-                            if url_list:
-                                video_url = url_list[0]
-                        elif video.get('video') and video['video'].get('download_addr'):
-                            url_list = video['video']['download_addr'].get('url_list', [])
-                            if url_list:
-                                video_url = url_list[0]
-                        
-                        if video_url:
-                            # HTTPをHTTPSに変換
-                            if not video_url.startswith("https"):
-                                video_url = video_url.replace("http", "https")
-                            video_urls.append(video_url)
+                        # Nếu muốn lấy direct video URL (có thể hết hạn), uncomment phần dưới
+                        # video_url = ""
+                        # if video.get('video') and video['video'].get('play_addr'):
+                        #     url_list = video['video']['play_addr'].get('url_list', [])
+                        #     if url_list:
+                        #         video_url = url_list[0]
+                        # elif video.get('video') and video['video'].get('download_addr'):
+                        #     url_list = video['video']['download_addr'].get('url_list', [])
+                        #     if url_list:
+                        #         video_url = url_list[0]
+                        # 
+                        # if video_url:
+                        #     # HTTPをHTTPSに変換
+                        #     if not video_url.startswith("https"):
+                        #         video_url = video_url.replace("http", "https")
+                        #     video_urls.append(video_url)
                     
                     print(f"Đã tìm thấy {len(video_urls)} video")
                     
