@@ -93,6 +93,9 @@ class MainWindow:
         self.import_btn = ttk.Button(links_buttons, text="Import từ file .txt", command=self._import_links)
         self.import_btn.pack(side=tk.LEFT, padx=5)
         
+        self.get_user_videos_btn = ttk.Button(links_buttons, text="Lấy video từ user", command=self._get_user_videos)
+        self.get_user_videos_btn.pack(side=tk.LEFT, padx=5)
+        
         self.clear_links_btn = ttk.Button(links_buttons, text="Xóa tất cả", command=self._clear_links)
         self.clear_links_btn.pack(side=tk.LEFT, padx=5)
         
@@ -312,6 +315,104 @@ class MainWindow:
                 messagebox.showinfo("Thành công", f"Đã import {len(content.splitlines())} link!")
             except Exception as e:
                 messagebox.showerror("Lỗi", f"Không thể đọc file: {e}")
+    
+    def _get_user_videos(self):
+        """Lấy tất cả video từ user profile (giống như JavaScript code)"""
+        import tkinter.simpledialog as simpledialog
+        
+        # Nhập user URL
+        user_url = simpledialog.askstring(
+            "Lấy video từ User",
+            "Nhập URL user profile Douyin:\n(Ví dụ: https://www.douyin.com/user/MS4wLjABAAAA...)\n\nHoặc chỉ cần user ID:",
+            initialvalue=""
+        )
+        
+        if not user_url:
+            return
+        
+        # Nếu chỉ có user ID, thêm URL prefix
+        if not user_url.startswith('http'):
+            user_url = f"https://www.douyin.com/user/{user_url}"
+        
+        # Kiểm tra cookie
+        cookie = self.cookie_manager.get_cookie()
+        if not cookie:
+            messagebox.showerror("Lỗi", "Vui lòng nhập và lưu cookie trước!")
+            return
+        
+        # Xác nhận
+        result = messagebox.askyesno(
+            "Xác nhận",
+            f"Bạn có muốn lấy tất cả video từ user này không?\n\nURL: {user_url}\n\nQuá trình này có thể mất vài phút..."
+        )
+        
+        if not result:
+            return
+        
+        # Lấy video URLs
+        try:
+            from downloader import VideoDownloader
+            downloader = VideoDownloader(cookie)
+            
+            # Disable button trong khi xử lý
+            self.get_user_videos_btn.config(state=tk.DISABLED)
+            self.progress_label.config(text="Đang lấy video từ user...")
+            self.root.update()
+            
+            video_urls = downloader.get_all_videos_from_user(user_url)
+            
+            if video_urls:
+                # Thêm vào text box
+                links_text = '\n'.join(video_urls)
+                self.links_text.delete('1.0', tk.END)
+                self.links_text.insert('1.0', links_text)
+                
+                # Lưu vào file (giống như JavaScript code)
+                save_path = filedialog.asksaveasfilename(
+                    title="Lưu danh sách video",
+                    defaultextension=".txt",
+                    filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+                    initialfile="douyin-video-links.txt"
+                )
+                
+                if save_path:
+                    try:
+                        with open(save_path, 'w', encoding='utf-8') as f:
+                            f.write(links_text)
+                        messagebox.showinfo(
+                            "Thành công",
+                            f"Đã lấy {len(video_urls)} video!\n\n"
+                            f"Đã lưu vào file: {save_path}\n\n"
+                            f"Bạn có thể:\n"
+                            f"1. Sử dụng danh sách này để tải video\n"
+                            f"2. Import vào IDM để tải hàng loạt"
+                        )
+                    except Exception as e:
+                        messagebox.showerror("Lỗi", f"Không thể lưu file: {e}")
+                else:
+                    messagebox.showinfo(
+                        "Thành công",
+                        f"Đã lấy {len(video_urls)} video!\n\n"
+                        f"Danh sách đã được thêm vào ô link video."
+                    )
+            else:
+                messagebox.showwarning(
+                    "Cảnh báo",
+                    "Không tìm thấy video nào!\n\n"
+                    "Có thể:\n"
+                    "1. User không có video công khai\n"
+                    "2. Cookie không hợp lệ\n"
+                    "3. User ID không đúng"
+                )
+            
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Lỗi khi lấy video: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            # Enable button lại
+            self.get_user_videos_btn.config(state=tk.NORMAL)
+            self.progress_label.config(text="Sẵn sàng")
     
     def _clear_links(self):
         """Xóa tất cả link"""

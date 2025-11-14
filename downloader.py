@@ -170,8 +170,18 @@ class VideoDownloader:
                 print(f"Không thể trích xuất video ID từ URL: {url}")
                 return None
             
-            # Thử nhiều API endpoint khác nhau
+            # Thử TikVideo.App API trước (nếu có)
+            print("Thử sử dụng TikVideo.App API...")
+            tikvideo_result = self._get_video_info_from_tikvideo(url)
+            if tikvideo_result:
+                print("Đã lấy được thông tin video từ TikVideo.App API!")
+                return tikvideo_result
+            
+            # Thử nhiều API endpoint khác nhau（JavaScriptコードから学んだ方法を含む）
             api_endpoints = [
+                # JavaScriptコードで使用されているエンドポイント（より信頼性が高い）
+                f"https://www.douyin.com/aweme/v1/web/aweme/detail/?device_platform=webapp&aid=6383&channel=channel_pc_web&aweme_id={video_id}&version_code=170400&version_name=17.4.0",
+                # 元のエンドポイント
                 f"https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id={video_id}",
                 f"https://www.douyin.com/aweme/v1/web/aweme/detail/?aweme_id={video_id}&aid=1128&version_name=23.5.0&device_platform=web&device_id=0",
             ]
@@ -217,7 +227,7 @@ class VideoDownloader:
                 print("Tất cả API endpoint đều thất bại, thử lấy từ HTML page...")
                 return self._get_video_info_from_html(url, video_id)
             
-            # Parse response để lấy link video
+            # Parse response để lấy link video（JavaScriptコードの方法を参考）
             if 'aweme_detail' in data:
                 aweme = data['aweme_detail']
                 video_info = {
@@ -227,25 +237,68 @@ class VideoDownloader:
                     'video_url': None
                 }
                 
-                # Tìm link video trong response
+                # JavaScriptコードの方法: video.video.play_addr.url_list[0] または video.video.download_addr.url_list[0]
                 video_data = aweme.get('video', {})
                 if video_data:
+                    # まず play_addr を試す
                     play_addr = video_data.get('play_addr', {})
                     if play_addr:
                         url_list = play_addr.get('url_list', [])
-                        if url_list:
-                            video_info['video_url'] = url_list[0]
-                            print(f"Đã tìm thấy video URL")
-                        else:
-                            print("Không tìm thấy url_list trong play_addr")
-                    else:
-                        print("Không tìm thấy play_addr trong video_data")
+                        if url_list and len(url_list) > 0:
+                            video_url = url_list[0]
+                            # HTTPをHTTPSに変換（JavaScriptコードの方法）
+                            if not video_url.startswith("https"):
+                                video_url = video_url.replace("http", "https")
+                            video_info['video_url'] = video_url
+                            print(f"Đã tìm thấy video URL từ play_addr")
+                            return video_info
+                    
+                    # play_addrがない場合、download_addrを試す
+                    download_addr = video_data.get('download_addr', {})
+                    if download_addr:
+                        url_list = download_addr.get('url_list', [])
+                        if url_list and len(url_list) > 0:
+                            video_url = url_list[0]
+                            if not video_url.startswith("https"):
+                                video_url = video_url.replace("http", "https")
+                            video_info['video_url'] = video_url
+                            print(f"Đã tìm thấy video URL từ download_addr")
+                            return video_info
+                    
+                    print("Không tìm thấy play_addr hoặc download_addr trong video_data")
                 else:
                     print("Không tìm thấy video trong aweme_detail")
                 
                 return video_info
+            elif 'aweme_list' in data:
+                # リスト形式のレスポンス（複数ビデオの場合）
+                aweme_list = data['aweme_list']
+                if aweme_list and len(aweme_list) > 0:
+                    # 最初のビデオを取得
+                    aweme = aweme_list[0]
+                    video_info = {
+                        'video_id': video_id,
+                        'title': aweme.get('desc', ''),
+                        'author': aweme.get('author', {}).get('nickname', ''),
+                        'video_url': None
+                    }
+                    
+                    video_data = aweme.get('video', {})
+                    if video_data:
+                        play_addr = video_data.get('play_addr', {})
+                        if play_addr:
+                            url_list = play_addr.get('url_list', [])
+                            if url_list and len(url_list) > 0:
+                                video_url = url_list[0]
+                                if not video_url.startswith("https"):
+                                    video_url = video_url.replace("http", "https")
+                                video_info['video_url'] = video_url
+                                print(f"Đã tìm thấy video URL từ aweme_list")
+                                return video_info
+                
+                return None
             else:
-                print(f"Response không chứa 'aweme_detail'. Keys: {data.keys() if isinstance(data, dict) else 'Not a dict'}")
+                print(f"Response không chứa 'aweme_detail' hoặc 'aweme_list'. Keys: {data.keys() if isinstance(data, dict) else 'Not a dict'}")
                 # Thử lấy từ HTML
                 return self._get_video_info_from_html(url, video_id)
             
@@ -332,27 +385,160 @@ class VideoDownloader:
             
             # Nếu vẫn chưa tìm thấy, thử tìm trực tiếp trong HTML
             if not video_url:
-                # Tìm URL pattern với full URL
-                direct_patterns = [
-                    r'https://[^"\'<>\s]+\.mp4[^"\'<>\s]*',
-                    r'https://[^"\'<>\s]+\.m3u8[^"\'<>\s]*',
-                    r'https://[^"\'<>\s]*aweme[^"\'<>\s]*\.mp4[^"\'<>\s]*',
-                    r'https://[^"\'<>\s]*douyin[^"\'<>\s]*\.mp4[^"\'<>\s]*',
-                    r'https://[^"\'<>\s]*bytednsdoc[^"\'<>\s]*\.mp4[^"\'<>\s]*',
-                    r'https://[^"\'<>\s]*\.mp4\?[^"\'<>\s]*',
+                # Trước tiên, thử tìm trong RENDER_DATA hoặc window data
+                print("Đang tìm kiếm trong RENDER_DATA và window data...")
+                render_data_patterns = [
+                    r'<script[^>]*id="RENDER_DATA"[^>]*>(.+?)</script>',
+                    r'window\._UNIVERSAL_DATA\s*=\s*({.+?});',
+                    r'window\._SSR_HYDRATED_DATA\s*=\s*({.+?});',
+                    r'window\.__INITIAL_STATE__\s*=\s*({.+?});',
                 ]
                 
-                for pattern in direct_patterns:
-                    matches = re.findall(pattern, html_content)
+                for pattern in render_data_patterns:
+                    matches = re.findall(pattern, html_content, re.DOTALL)
                     if matches:
-                        # Lấy URL dài nhất（通常は完全なURL）
-                        video_url = max(matches, key=len)
-                        # Loại bỏ các ký tự không hợp lệ ở cuối
-                        video_url = video_url.rstrip('.,;!?\\"\'<>')
-                        if len(video_url) > 20:  # Đảm bảo là URL hợp lệ
+                        print(f"Tìm thấy {len(matches)} match với pattern: {pattern[:50]}...")
+                        for i, match in enumerate(matches):
+                            print(f"Đang xử lý match {i+1}/{len(matches)}, length: {len(match)}")
+                            
+                            # RENDER_DATAは通常URLエンコードされている
+                            try:
+                                # Thử decode URL encoded JSON
+                                decoded = urllib.parse.unquote(match)
+                                print(f"Đã decode, length sau decode: {len(decoded)}")
+                                
+                                # JSONをパース
+                                data = json.loads(decoded)
+                                print(f"Đã parse JSON thành công! Type: {type(data)}")
+                                
+                                # ビデオURLを抽出
+                                found_url = self._extract_video_url_from_json(data, video_id)
+                                if found_url:
+                                    video_url = found_url
+                                    print(f"Tìm thấy video URL trong RENDER_DATA: {video_url[:150]}...")
+                                    break
+                                else:
+                                    print("Không tìm thấy video URL trong JSON data")
+                                    # Debug: JSON構造を確認
+                                    if isinstance(data, dict):
+                                        print(f"Top level keys: {list(data.keys())[:10]}")
+                                        
+                            except urllib.error.UnquoteError as e:
+                                print(f"Lỗi khi decode URL: {e}")
+                                try:
+                                    # Thử parse trực tiếp（既にデコード済みの場合）
+                                    data = json.loads(match)
+                                    found_url = self._extract_video_url_from_json(data, video_id)
+                                    if found_url:
+                                        video_url = found_url
+                                        print(f"Tìm thấy video URL trong data (không decode): {video_url[:150]}...")
+                                        break
+                                except json.JSONDecodeError as e2:
+                                    print(f"Lỗi khi parse JSON (không decode): {str(e2)[:200]}")
+                                    # 最初の100文字を表示してデバッグ
+                                    print(f"Match preview: {match[:200]}...")
+                            except json.JSONDecodeError as e:
+                                print(f"Lỗi khi parse JSON: {str(e)[:200]}")
+                                # デコード済みデータの最初の200文字を表示
+                                try:
+                                    decoded = urllib.parse.unquote(match)
+                                    print(f"Decoded preview: {decoded[:200]}...")
+                                except:
+                                    print(f"Match preview: {match[:200]}...")
+                            except Exception as e:
+                                print(f"Lỗi không xác định khi xử lý RENDER_DATA: {type(e).__name__}: {str(e)[:200]}")
+                                import traceback
+                                traceback.print_exc()
+                    
+                    if video_url:
+                        break
+                
+                # Nếu vẫn không tìm thấy trong RENDER_DATA, thử tìm trong toàn bộ HTML với pattern khác
+                if not video_url:
+                    print("Đang tìm kiếm trong toàn bộ HTML với pattern khác...")
+                    # Tìm trong script tags với JSON data
+                    script_pattern = r'<script[^>]*>(.*?)</script>'
+                    scripts = re.findall(script_pattern, html_content, re.DOTALL)
+                    print(f"Tìm thấy {len(scripts)} script tags")
+                    
+                    for i, script in enumerate(scripts):
+                        # Tìm JSON object trong script
+                        json_patterns = [
+                            r'\{[^{}]*"playAddr"[^{}]*\}',
+                            r'\{[^{}]*"play_addr"[^{}]*\}',
+                            r'\{[^{}]*"url_list"[^{}]*\}',
+                        ]
+                        
+                        for json_pattern in json_patterns:
+                            json_matches = re.findall(json_pattern, script, re.DOTALL)
+                            for json_match in json_matches:
+                                try:
+                                    # Thử parse JSON
+                                    data = json.loads(json_match)
+                                    found_url = self._extract_video_url_from_json(data, video_id)
+                                    if found_url:
+                                        video_url = found_url
+                                        print(f"Tìm thấy video URL trong script tag {i}: {video_url[:150]}...")
+                                        break
+                                except:
+                                    pass
+                            
+                            if video_url:
+                                break
+                        
+                        if video_url:
                             break
-                        else:
-                            video_url = None
+                
+                # Nếu vẫn chưa tìm thấy, thử tìm tất cả URL pattern（最後の手段）
+                if not video_url:
+                    print("Đang tìm kiếm tất cả URL trong HTML (最後の手段)...")
+                    all_urls = []
+                    direct_patterns = [
+                        r'https://[^"\'<>\s]+\.mp4[^"\'<>\s]*',
+                        r'https://[^"\'<>\s]+\.m3u8[^"\'<>\s]*',
+                    ]
+                    
+                    for pattern in direct_patterns:
+                        matches = re.findall(pattern, html_content)
+                        all_urls.extend(matches)
+                    
+                    print(f"Tìm thấy {len(all_urls)} URL trong HTML")
+                    
+                    # Loại bỏ các URL không hợp lệ
+                    valid_urls = []
+                    exclude_keywords = [
+                        'douyin_pc_client',
+                        'download/douyin',
+                        'bytednsdoc',
+                        'eden-cn',
+                        'ild_jw',
+                    ]
+                    
+                    for url in all_urls:
+                        url_clean = url.rstrip('.,;!?\\"\'<>')
+                        # Kiểm tra URL có chứa từ khóa loại trừ không
+                        should_exclude = any(keyword in url_clean.lower() for keyword in exclude_keywords)
+                        
+                        if not should_exclude and len(url_clean) > 50:
+                            # Ưu tiên URL có chứa video ID hoặc aweme
+                            if str(video_id) in url_clean or 'aweme' in url_clean.lower():
+                                valid_urls.insert(0, url_clean)  # Thêm vào đầu
+                            else:
+                                valid_urls.append(url_clean)
+                    
+                    if valid_urls:
+                        # Lấy URL đầu tiên (ưu tiên có video ID hoặc aweme)
+                        video_url = valid_urls[0]
+                        print(f"Tìm thấy {len(valid_urls)} URL hợp lệ, chọn: {video_url[:150]}...")
+                    else:
+                        print("Không tìm thấy URL hợp lệ trong HTML (tất cả đều bị loại trừ)")
+                        print("WARNING: Không thể tìm thấy video URL hợp lệ từ HTML!")
+                        print("Có thể cần cookie mới hoặc video không khả dụng.")
+                        # Debug: hiển thị một số URL để kiểm tra
+                        if all_urls:
+                            print(f"Tất cả URL tìm thấy (để debug):")
+                            for i, url in enumerate(all_urls[:5]):  # Chỉ hiển thị 5 URL đầu
+                                print(f"  {i+1}. {url[:100]}...")
                 
                 # Nếu vẫn không tìm thấy, thử tìm trong JSON string
                 if not video_url:
@@ -417,24 +603,41 @@ class VideoDownloader:
                     r'window\._UNIVERSAL_DATA\s*=\s*({.+?});',
                     r'window\._SSR_HYDRATED_DATA\s*=\s*({.+?});',
                     r'window\.__INITIAL_STATE__\s*=\s*({.+?});',
+                    r'<script[^>]*id="RENDER_DATA"[^>]*>(.+?)</script>',
                 ]
                 
                 for pattern in window_patterns:
                     matches = re.findall(pattern, html_content, re.DOTALL)
                     if matches:
-                        try:
-                            data = json.loads(matches[0])
-                            video_url = self._extract_video_url_from_json(data)
-                            if video_url and video_url.startswith('http') and len(video_url) > 20:
-                                print(f"Tìm thấy video URL trong window data: {video_url[:150]}...")
-                                return {
-                                    'video_id': video_id,
-                                    'title': '',
-                                    'author': '',
-                                    'video_url': video_url
-                                }
-                        except:
-                            pass
+                        for match in matches:
+                            try:
+                                # Thử decode URL encoded JSON
+                                decoded = urllib.parse.unquote(match)
+                                data = json.loads(decoded)
+                                video_url = self._extract_video_url_from_json(data, video_id)
+                                if video_url:
+                                    print(f"Tìm thấy video URL trong window data: {video_url[:150]}...")
+                                    return {
+                                        'video_id': video_id,
+                                        'title': '',
+                                        'author': '',
+                                        'video_url': video_url
+                                    }
+                            except Exception as e:
+                                try:
+                                    # Thử parse trực tiếp
+                                    data = json.loads(match)
+                                    video_url = self._extract_video_url_from_json(data, video_id)
+                                    if video_url:
+                                        print(f"Tìm thấy video URL trong window data: {video_url[:150]}...")
+                                        return {
+                                            'video_id': video_id,
+                                            'title': '',
+                                            'author': '',
+                                            'video_url': video_url
+                                        }
+                                except Exception as e2:
+                                    pass
             
             print("Không tìm thấy video URL trong HTML")
             return None
@@ -445,35 +648,334 @@ class VideoDownloader:
             traceback.print_exc()
             return None
     
-    def _extract_video_url_from_json(self, data: dict) -> Optional[str]:
+    def _extract_video_url_from_json(self, data: dict, video_id: str = None, depth: int = 0, max_depth: int = 10) -> Optional[str]:
         """Recursively tìm video URL trong JSON data"""
+        # 深さ制限を追加（無限ループを防ぐ）
+        if depth > max_depth:
+            return None
+        
+        # URL không hợp lệ（非ビデオURL）
+        exclude_patterns = [
+            'chrome.google.com',
+            'webstore',
+            'douyin_pc_client',
+            'bytednsdoc',
+            'eden-cn',
+            'download/douyin',
+            'static',
+        ]
+        
+        def is_valid_video_url(url: str) -> bool:
+            """Kiểm tra URL có phải là video URL hợp lệ không"""
+            if not url or not isinstance(url, str):
+                return False
+            if not url.startswith('http'):
+                return False
+            # Loại bỏ các URL không hợp lệ
+            url_lower = url.lower()
+            if any(pattern in url_lower for pattern in exclude_patterns):
+                return False
+            # Phải là .mp4 hoặc .m3u8
+            if not ('.mp4' in url_lower or '.m3u8' in url_lower):
+                return False
+            # URL phải đủ dài
+            if len(url) < 50:
+                return False
+            return True
+        
         if isinstance(data, dict):
-            # Tìm các key có thể chứa video URL
-            for key in ['playAddr', 'play_addr', 'url_list', 'video_url', 'url']:
+            # Ưu tiên tìm trong các key cụ thể
+            priority_keys = ['playAddr', 'play_addr', 'url_list', 'video_url', 'url', 'play_url', 'playUrl', 'videoUrl']
+            for key in priority_keys:
                 if key in data:
                     value = data[key]
-                    if isinstance(value, str) and value.startswith('http'):
+                    if isinstance(value, str) and is_valid_video_url(value):
+                        print(f"Tìm thấy video URL trong key '{key}' (depth {depth})")
                         return value
                     elif isinstance(value, list) and len(value) > 0:
-                        if isinstance(value[0], str) and value[0].startswith('http'):
-                            return value[0]
+                        for item in value:
+                            if isinstance(item, str) and is_valid_video_url(item):
+                                print(f"Tìm thấy video URL trong key '{key}' list (depth {depth})")
+                                return item
                     elif isinstance(value, dict):
-                        result = self._extract_video_url_from_json(value)
+                        result = self._extract_video_url_from_json(value, video_id, depth + 1, max_depth)
                         if result:
                             return result
             
-            # Recursive search
-            for value in data.values():
-                result = self._extract_video_url_from_json(value)
+            # Tìm trong video data structure
+            video_keys = ['video', 'aweme', 'aweme_detail', 'itemInfo', 'item_info']
+            for video_key in video_keys:
+                if video_key in data:
+                    video_data = data[video_key]
+                    if isinstance(video_data, dict):
+                        result = self._extract_video_url_from_json(video_data, video_id, depth + 1, max_depth)
+                        if result:
+                            print(f"Tìm thấy video URL trong '{video_key}' (depth {depth})")
+                            return result
+                    elif isinstance(video_data, list) and len(video_data) > 0:
+                        for item in video_data:
+                            if isinstance(item, dict):
+                                result = self._extract_video_url_from_json(item, video_id, depth + 1, max_depth)
+                                if result:
+                                    return result
+            
+            # appキーの下を探索（RENDER_DATAの構造）
+            if 'app' in data:
+                app_data = data['app']
+                if isinstance(app_data, dict):
+                    result = self._extract_video_url_from_json(app_data, video_id, depth + 1, max_depth)
+                    if result:
+                        print(f"Tìm thấy video URL trong 'app' (depth {depth})")
+                        return result
+            
+            # Recursive search trong các giá trị khác
+            for key, value in data.items():
+                # Bỏ qua các key không liên quan（ただし、appは探索する）
+                if key in ['text', 'title', 'desc', 'author', 'user', 'statistics', 'music', 'comment', 'share']:
+                    continue
+                
+                # 深すぎる場合はスキップ
+                if depth > 5 and key not in ['video', 'aweme', 'app', 'data', 'item']:
+                    continue
+                
+                result = self._extract_video_url_from_json(value, video_id, depth + 1, max_depth)
                 if result:
                     return result
         elif isinstance(data, list):
             for item in data:
-                result = self._extract_video_url_from_json(item)
+                result = self._extract_video_url_from_json(item, video_id, depth + 1, max_depth)
                 if result:
                     return result
         
         return None
+    
+    def _get_video_info_from_tikvideo(self, url: str) -> Optional[Dict]:
+        """
+        Lấy thông tin video từ TikVideo.App API
+        
+        Args:
+            url: URL video Douyin
+            
+        Returns:
+            Dict chứa thông tin video hoặc None nếu lỗi
+        """
+        try:
+            # TikVideo.AppのAPIエンドポイントを試す
+            # 一般的なパターン: /api/download, /api/video, /api/parse など
+            api_endpoints = [
+                "https://tikvideo.app/api/download",
+                "https://tikvideo.app/api/video",
+                "https://tikvideo.app/api/parse",
+                "https://api.tikvideo.app/download",
+            ]
+            
+            for api_url in api_endpoints:
+                try:
+                    print(f"Thử gọi TikVideo API: {api_url}")
+                    
+                    # POSTリクエストでURLを送信
+                    headers = {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                        "Content-Type": "application/x-www-form-urlencoded",
+                        "Referer": "https://tikvideo.app/",
+                    }
+                    
+                    # 異なる形式でデータを送信
+                    payloads = [
+                        {"url": url},
+                        {"link": url},
+                        {"video_url": url},
+                        {"input": url},
+                    ]
+                    
+                    for payload in payloads:
+                        try:
+                            response = self.session.post(
+                                api_url,
+                                data=payload,
+                                headers=headers,
+                                timeout=30
+                            )
+                            
+                            print(f"TikVideo API response status: {response.status_code}")
+                            
+                            if response.status_code == 200:
+                                try:
+                                    data = response.json()
+                                    print(f"TikVideo API response keys: {data.keys() if isinstance(data, dict) else 'Not a dict'}")
+                                    
+                                    # レスポンス構造に応じてビデオURLを抽出
+                                    video_url = None
+                                    
+                                    # 様々な可能性のあるキーを試す
+                                    possible_keys = [
+                                        'video_url', 'videoUrl', 'video', 'url', 'download_url',
+                                        'play_url', 'playUrl', 'mp4', 'mp4_url', 'hd_url',
+                                        'nwm_video_url', 'nwmVideoUrl', 'video_play_url'
+                                    ]
+                                    
+                                    for key in possible_keys:
+                                        if key in data:
+                                            value = data[key]
+                                            if isinstance(value, str) and value.startswith('http'):
+                                                video_url = value
+                                                break
+                                            elif isinstance(value, dict):
+                                                # ネストされた構造を探索
+                                                for sub_key in possible_keys:
+                                                    if sub_key in value and isinstance(value[sub_key], str) and value[sub_key].startswith('http'):
+                                                        video_url = value[sub_key]
+                                                        break
+                                                if video_url:
+                                                    break
+                                    
+                                    # リスト形式の場合
+                                    if not video_url and isinstance(data, dict):
+                                        if 'data' in data:
+                                            data_obj = data['data']
+                                            for key in possible_keys:
+                                                if key in data_obj:
+                                                    value = data_obj[key]
+                                                    if isinstance(value, str) and value.startswith('http'):
+                                                        video_url = value
+                                                        break
+                                    
+                                    if video_url:
+                                        print(f"Tìm thấy video URL từ TikVideo API: {video_url[:150]}...")
+                                        return {
+                                            'video_id': self.extract_video_id(url) or '',
+                                            'title': data.get('title', data.get('desc', '')),
+                                            'author': data.get('author', data.get('nickname', '')),
+                                            'video_url': video_url
+                                        }
+                                    
+                                except json.JSONDecodeError:
+                                    # HTMLレスポンスの場合、ビデオURLを直接検索
+                                    html_content = response.text
+                                    video_url_match = re.search(r'https://[^"\'<>\s]+\.mp4[^"\'<>\s]*', html_content)
+                                    if video_url_match:
+                                        video_url = video_url_match.group(0)
+                                        if 'douyin_pc_client' not in video_url.lower():
+                                            print(f"Tìm thấy video URL từ TikVideo HTML: {video_url[:150]}...")
+                                            return {
+                                                'video_id': self.extract_video_id(url) or '',
+                                                'title': '',
+                                                'author': '',
+                                                'video_url': video_url
+                                            }
+                                    
+                        except Exception as e:
+                            print(f"Lỗi khi gọi TikVideo API {api_url} với payload {payload}: {e}")
+                            continue
+                    
+                except Exception as e:
+                    print(f"Lỗi khi kết nối TikVideo API {api_url}: {e}")
+                    continue
+            
+            print("Không thể lấy thông tin từ TikVideo.App API")
+            return None
+            
+        except Exception as e:
+            print(f"Lỗi khi gọi TikVideo API: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+    
+    def get_all_videos_from_user(self, user_url: str) -> List[str]:
+        """
+        Lấy tất cả video URL từ user profile (giống như JavaScript code)
+        
+        Args:
+            user_url: URL user profile (ví dụ: https://www.douyin.com/user/MS4wLjABAAAA...)
+            
+        Returns:
+            List các video URL
+        """
+        video_urls = []
+        
+        try:
+            # Extract sec_user_id từ URL
+            import re
+            match = re.search(r'/user/([^/?]+)', user_url)
+            if not match:
+                print(f"Không thể trích xuất user ID từ URL: {user_url}")
+                return []
+            
+            sec_user_id = match.group(1)
+            print(f"User ID: {sec_user_id}")
+            
+            has_more = 1
+            max_cursor = 0
+            error_count = 0
+            
+            while has_more == 1 and error_count < 5:
+                try:
+                    # API endpoint giống như JavaScript code
+                    api_url = f"https://www.douyin.com/aweme/v1/web/aweme/post/?device_platform=webapp&aid=6383&channel=channel_pc_web&sec_user_id={sec_user_id}&max_cursor={max_cursor}&count=20&version_code=170400&version_name=17.4.0"
+                    
+                    print(f"Đang lấy video (max_cursor={max_cursor}), đã tìm thấy {len(video_urls)} video...")
+                    
+                    response = self.session.get(api_url, timeout=15)
+                    
+                    if response.status_code != 200:
+                        print(f"HTTP Error: {response.status_code}")
+                        error_count += 1
+                        import time
+                        time.sleep(2)
+                        continue
+                    
+                    data = response.json()
+                    
+                    if not data or 'aweme_list' not in data:
+                        print("Không tìm thấy video data, thử lại...")
+                        error_count += 1
+                        import time
+                        time.sleep(3)
+                        continue
+                    
+                    error_count = 0
+                    has_more = data.get('has_more', 0)
+                    max_cursor = data.get('max_cursor', 0)
+                    
+                    # Extract video URLs
+                    for video in data['aweme_list']:
+                        video_url = ""
+                        
+                        if video.get('video') and video['video'].get('play_addr'):
+                            url_list = video['video']['play_addr'].get('url_list', [])
+                            if url_list:
+                                video_url = url_list[0]
+                        elif video.get('video') and video['video'].get('download_addr'):
+                            url_list = video['video']['download_addr'].get('url_list', [])
+                            if url_list:
+                                video_url = url_list[0]
+                        
+                        if video_url:
+                            # HTTPをHTTPSに変換
+                            if not video_url.startswith("https"):
+                                video_url = video_url.replace("http", "https")
+                            video_urls.append(video_url)
+                    
+                    print(f"Đã tìm thấy {len(video_urls)} video")
+                    
+                    # Delay giữa các request
+                    import time
+                    time.sleep(1)
+                    
+                except Exception as e:
+                    print(f"Lỗi khi lấy video: {e}")
+                    error_count += 1
+                    import time
+                    time.sleep(3)
+            
+            print(f"Hoàn thành! Tổng cộng {len(video_urls)} video")
+            return video_urls
+            
+        except Exception as e:
+            print(f"Lỗi khi lấy video từ user: {e}")
+            import traceback
+            traceback.print_exc()
+            return []
     
     def download_video(self, video_url: str, save_path: str) -> bool:
         """
