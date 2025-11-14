@@ -708,20 +708,45 @@ class MainWindow:
         """Xóa các video đã tải thành công"""
         if self.logger:
             self.logger.info("User clicked: Xóa video đã tải button")
+            self.logger.info(f"Current self.results count: {len(self.results)}")
+            for idx, r in enumerate(self.results):
+                self.logger.info(f"  Result {idx}: success={r.get('success')}, file_path={r.get('file_path')}")
         
         # Kiểm tra xem có video nào đã tải thành công không
         successful_videos = [r for r in self.results if r.get('success') and r.get('file_path')]
         
-        if not successful_videos:
+        if self.logger:
+            self.logger.info(f"Found {len(successful_videos)} successful videos in self.results")
+        
+        # ダウンロードフォルダからも直接ファイルを探す
+        download_folder = self.cookie_manager.get_download_folder()
+        all_video_files = []
+        if download_folder and os.path.exists(download_folder):
+            if self.logger:
+                self.logger.info(f"Scanning download folder: {download_folder}")
+            # 再帰的にすべてのビデオファイルを探す
+            for root, dirs, files in os.walk(download_folder):
+                for file in files:
+                    if file.lower().endswith(('.mp4', '.mov', '.avi', '.mkv', '.flv', '.webm')):
+                        full_path = os.path.join(root, file)
+                        all_video_files.append(full_path)
+            if self.logger:
+                self.logger.info(f"Found {len(all_video_files)} video files in download folder")
+        
+        # どちらか一方でもファイルがあれば削除を実行
+        if not successful_videos and not all_video_files:
             if self.logger:
                 self.logger.info("Xóa video - Không có video nào đã tải thành công")
             messagebox.showinfo("Thông tin", "Không có video nào đã tải thành công để xóa.")
             return
         
+        # 削除対象のファイル数を計算
+        total_files = len(successful_videos) if successful_videos else len(all_video_files)
+        
         # Xác nhận xóa
         result = messagebox.askyesno(
             "Xác nhận xóa",
-            f"Bạn có chắc chắn muốn xóa {len(successful_videos)} video đã tải thành công không?\n\n"
+            f"Bạn có chắc chắn muốn xóa {total_files} video đã tải thành công không?\n\n"
             f"Thao tác này không thể hoàn tác!"
         )
         
@@ -730,8 +755,36 @@ class MainWindow:
                 self.logger.info("Xóa video - Người dùng đã hủy")
             return
         
-        # Controllerを使用して削除
-        deleted_count, failed_count, failed_files = self.download_controller.delete_downloaded_videos(self.results)
+        # Controllerを使用して削除（self.resultsから）
+        deleted_count = 0
+        failed_count = 0
+        failed_files = []
+        
+        if successful_videos:
+            deleted_count, failed_count, failed_files = self.download_controller.delete_downloaded_videos(self.results)
+        
+        # ダウンロードフォルダから直接削除（self.resultsにない場合）
+        if all_video_files:
+            for file_path in all_video_files:
+                # self.resultsに含まれているかチェック
+                already_deleted = False
+                if successful_videos:
+                    for video_result in successful_videos:
+                        if video_result.get('file_path') == file_path:
+                            already_deleted = True
+                            break
+                
+                if not already_deleted and os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                        deleted_count += 1
+                        if self.logger:
+                            self.logger.info(f"Deleted file from filesystem: {file_path}")
+                    except Exception as e:
+                        failed_count += 1
+                        failed_files.append(file_path)
+                        if self.logger:
+                            self.logger.error(f"Error deleting file {file_path}: {e}", exc_info=True)
         
         # UIを更新
         for video_result in successful_videos:
