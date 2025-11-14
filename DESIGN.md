@@ -247,3 +247,4 @@ Sau khi cho AI tạo app, cần output:
 
 * Hướng dẫn build lại app
 
+

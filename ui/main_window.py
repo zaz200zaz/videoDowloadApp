@@ -319,3 +319,4 @@ class MainWindow:
         self.should_stop = True
         self.progress_label.config(text="Đang dừng...")
 
+

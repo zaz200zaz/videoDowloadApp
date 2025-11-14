@@ -127,3 +127,4 @@ class CookieManager:
         config["settings"][key] = value
         self._save_config(config)
 
+
