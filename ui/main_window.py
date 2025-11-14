@@ -84,11 +84,11 @@ class MainWindow:
         links_frame = ttk.LabelFrame(main_frame, text="2. Danh sách Link Video", padding="10")
         links_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         links_frame.columnconfigure(0, weight=1)
-        links_frame.rowconfigure(1, weight=1)
+        links_frame.rowconfigure(1, weight=1, minsize=150)  # Đảm bảo có chiều cao tối thiểu
         main_frame.rowconfigure(1, weight=1)
         
         links_buttons = ttk.Frame(links_frame)
-        links_buttons.grid(row=0, column=0, sticky=tk.W, pady=5)
+        links_buttons.grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=5)
         
         self.import_btn = ttk.Button(links_buttons, text="Import từ file .txt", command=self._import_links)
         self.import_btn.pack(side=tk.LEFT, padx=5)
@@ -96,11 +96,17 @@ class MainWindow:
         self.clear_links_btn = ttk.Button(links_buttons, text="Xóa tất cả", command=self._clear_links)
         self.clear_links_btn.pack(side=tk.LEFT, padx=5)
         
-        self.links_text = scrolledtext.ScrolledText(links_frame, height=8, wrap=tk.WORD, state=tk.NORMAL)
-        self.links_text.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        # Tạo frame cho text area để đảm bảo hiển thị đúng
+        text_frame = ttk.Frame(links_frame)
+        text_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        text_frame.columnconfigure(0, weight=1)
+        text_frame.rowconfigure(0, weight=1)
+        
+        self.links_text = scrolledtext.ScrolledText(text_frame, height=8, wrap=tk.WORD, state=tk.NORMAL)
+        self.links_text.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         ttk.Label(links_frame, text="Mỗi dòng một link video Douyin", foreground="gray").grid(
-            row=2, column=0, sticky=tk.W, pady=2
+            row=2, column=0, columnspan=2, sticky=tk.W, pady=2
         )
         
         # ========== PHẦN 3: TẢI VIDEO ==========
