@@ -181,13 +181,37 @@ class MainWindow:
         self.video_format_combo.pack(side=tk.LEFT, padx=5)
         self.video_format_combo.bind("<<ComboboxSelected>>", self._on_format_changed)
         
+        # Chọn lọc theo hướng video
+        orientation_frame = ttk.Frame(download_frame)
+        orientation_frame.grid(row=3, column=0, sticky=tk.W, pady=5)
+        
+        ttk.Label(orientation_frame, text="Lọc theo hướng:").pack(side=tk.LEFT, padx=5)
+        saved_orientation = self.cookie_manager.get_setting("orientation_filter", "all")
+        orientation_text_map = {
+            "all": "Tất cả",
+            "vertical": "Video dọc",
+            "horizontal": "Video ngang"
+        }
+        orientation_text = orientation_text_map.get(saved_orientation, "Tất cả")
+        self.orientation_var = tk.StringVar(value=orientation_text)
+        orientation_options = [
+            ("Tất cả", "all"),
+            ("Video dọc", "vertical"),
+            ("Video ngang", "horizontal")
+        ]
+        self.orientation_combo = ttk.Combobox(orientation_frame, textvariable=self.orientation_var,
+                                              values=[opt[0] for opt in orientation_options],
+                                              state="readonly", width=20)
+        self.orientation_combo.pack(side=tk.LEFT, padx=5)
+        self.orientation_combo.bind("<<ComboboxSelected>>", self._on_orientation_changed)
+        
         # Progress bar
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(download_frame, variable=self.progress_var, maximum=100, length=400)
-        self.progress_bar.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=5)
+        self.progress_bar.grid(row=4, column=0, sticky=(tk.W, tk.E), pady=5)
         
         self.progress_label = ttk.Label(download_frame, text="Sẵn sàng")
-        self.progress_label.grid(row=4, column=0, sticky=tk.W, pady=2)
+        self.progress_label.grid(row=5, column=0, sticky=tk.W, pady=2)
         
         # ========== PHẦN 4: DANH SÁCH TRẠNG THÁI ==========
         status_frame = ttk.LabelFrame(main_frame, text="4. Trạng thái tải", padding="10")
@@ -450,30 +474,88 @@ class MainWindow:
         if self.logger:
             self.logger.info("Lấy video từ user - Người dùng đã xác nhận")
         
-        # Lấy video URLs
-        try:
-            from downloader import VideoDownloader
-            import os
-            from datetime import datetime
+        # Tạo progress dialog
+        progress_window = tk.Toplevel(self.root)
+        progress_window.title("Đang lấy video từ user...")
+        progress_window.geometry("500x150")
+        progress_window.transient(self.root)
+        progress_window.grab_set()
+        
+        # Center window
+        progress_window.update_idletasks()
+        x = (progress_window.winfo_screenwidth() // 2) - (500 // 2)
+        y = (progress_window.winfo_screenheight() // 2) - (150 // 2)
+        progress_window.geometry(f"500x150+{x}+{y}")
+        
+        # Progress label
+        progress_label = tk.Label(progress_window, text="Đang khởi tạo...", font=("Arial", 10))
+        progress_label.pack(pady=20)
+        
+        # Progress bar
+        progress_var = tk.DoubleVar()
+        progress_bar = tk.ttk.Progressbar(progress_window, variable=progress_var, maximum=100, length=400, mode='indeterminate')
+        progress_bar.pack(pady=10)
+        progress_bar.start(10)  # Start indeterminate progress
+        
+        # Status label
+        status_label = tk.Label(progress_window, text="", font=("Arial", 9), fg="gray")
+        status_label.pack(pady=5)
+        
+        progress_window.update()
+        
+        # Progress callback function
+        def update_progress(current, total, message):
+            """Update progress in UI thread"""
+            self.root.after(0, lambda: _update_progress_ui(current, total, message))
+        
+        def _update_progress_ui(current, total, message):
+            """Update progress UI (called in main thread)"""
+            progress_label.config(text=message)
+            status_label.config(text=f"Đã tìm thấy: {current} video" if current > 0 else "")
+            progress_window.update()
+        
+        # Lấy video URLs trong background thread
+        def fetch_videos():
+            try:
+                from services.video_downloader import VideoDownloader
+                import os
+                from datetime import datetime
+                import threading
+                
+                # Tạo log file cho việc lấy video từ user (sử dụng script directory)
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                # Nếu script_dir là ui/, lên một cấp
+                if os.path.basename(script_dir) == 'ui':
+                    script_dir = os.path.dirname(script_dir)
+                log_dir = os.path.join(script_dir, "logs")
+                os.makedirs(log_dir, exist_ok=True)
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                log_file = os.path.join(log_dir, f"get_user_videos_{timestamp}.log")
+                
+                downloader = VideoDownloader(cookie, log_file)
+                
+                # Disable button trong khi xử lý
+                self.root.after(0, lambda: self.get_user_videos_btn.config(state=tk.DISABLED))
+                
+                # Lấy video với progress callback
+                video_urls = downloader.get_all_videos_from_user(user_url, progress_callback=update_progress)
+                
+                # Close progress window and show results in main thread
+                self.root.after(0, lambda: _handle_results(video_urls))
+                
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(f"Lấy video từ user - Lỗi: {e}", exc_info=True)
+                self.root.after(0, lambda: _handle_error(e))
+        
+        def _handle_results(video_urls):
+            """Handle results in main thread"""
+            # Stop progress bar
+            progress_bar.stop()
+            progress_bar.config(mode='determinate', maximum=100, value=100)
             
-            # Tạo log file cho việc lấy video từ user (sử dụng script directory)
-            script_dir = os.path.dirname(os.path.abspath(__file__))
-            # Nếu script_dir là ui/, lên một cấp
-            if os.path.basename(script_dir) == 'ui':
-                script_dir = os.path.dirname(script_dir)
-            log_dir = os.path.join(script_dir, "logs")
-            os.makedirs(log_dir, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            log_file = os.path.join(log_dir, f"get_user_videos_{timestamp}.log")
-            
-            downloader = VideoDownloader(cookie, log_file)
-            
-            # Disable button trong khi xử lý
-            self.get_user_videos_btn.config(state=tk.DISABLED)
-            self.progress_label.config(text="Đang lấy video từ user...")
-            self.root.update()
-            
-            video_urls = downloader.get_all_videos_from_user(user_url)
+            # Close progress window
+            progress_window.destroy()
             
             if video_urls:
                 if self.logger:
@@ -529,16 +611,27 @@ class MainWindow:
                     "3. User ID không đúng"
                 )
             
-        except Exception as e:
-            if self.logger:
-                self.logger.error(f"Lấy video từ user - Lỗi: {e}", exc_info=True)
-            messagebox.showerror("Lỗi", f"Lỗi khi lấy video: {e}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            # Enable button lại
+            # Re-enable button
             self.get_user_videos_btn.config(state=tk.NORMAL)
-            self.progress_label.config(text="Sẵn sàng")
+        
+        def _handle_error(error):
+            """Handle error in main thread"""
+            # Stop progress bar
+            progress_bar.stop()
+            progress_bar.config(mode='determinate', maximum=100, value=0)
+            
+            # Close progress window
+            progress_window.destroy()
+            
+            messagebox.showerror("Lỗi", f"Lỗi khi lấy video từ user: {error}")
+            
+            # Re-enable button
+            self.get_user_videos_btn.config(state=tk.NORMAL)
+        
+        # Start fetching in background thread
+        import threading
+        thread = threading.Thread(target=fetch_videos, daemon=True)
+        thread.start()
     
     def _clear_links(self):
         """Xóa tất cả link"""
@@ -631,6 +724,20 @@ class MainWindow:
         self.cookie_manager.set_setting("video_format", format_value)
         if self.logger:
             self.logger.info(f"Định dạng video đã thay đổi: {selected_format} ({format_value})")
+    
+    def _on_orientation_changed(self, event=None):
+        """Xử lý khi người dùng thay đổi lọc theo hướng video"""
+        selected_orientation = self.orientation_var.get()
+        # Lưu setting
+        orientation_map = {
+            "Tất cả": "all",
+            "Video dọc": "vertical",
+            "Video ngang": "horizontal"
+        }
+        orientation_value = orientation_map.get(selected_orientation, "all")
+        self.cookie_manager.set_setting("orientation_filter", orientation_value)
+        if self.logger:
+            self.logger.info(f"Lọc theo hướng video đã thay đổi: {selected_orientation} ({orientation_value})")
     
     def _select_folder(self):
         """Chọn thư mục lưu video"""

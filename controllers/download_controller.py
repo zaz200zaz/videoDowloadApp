@@ -80,6 +80,7 @@ class DownloadController:
         download_folder = self.cookie_manager.get_download_folder()
         naming_mode = self.cookie_manager.get_setting("naming_mode", "video_id")
         video_format = self.cookie_manager.get_setting("video_format", "auto")
+        orientation_filter = self.cookie_manager.get_setting("orientation_filter", "all")
         
         # ダウンロードを開始
         self.download_service.start_download(
@@ -87,6 +88,7 @@ class DownloadController:
             download_folder=download_folder,
             naming_mode=naming_mode,
             video_format=video_format,
+            orientation_filter=orientation_filter,
             progress_callback=progress_callback,
             result_callback=result_callback,
             complete_callback=complete_callback

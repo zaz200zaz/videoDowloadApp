@@ -355,15 +355,39 @@ class VideoDownloader:
             # Parse response để lấy link video（JavaScriptコードの方法を参考）
             if 'aweme_detail' in data:
                 aweme = data['aweme_detail']
+                
+                # Lấy width và height để xác định hướng video
+                video_data = aweme.get('video', {})
+                width = video_data.get('width', 0) if video_data else 0
+                height = video_data.get('height', 0) if video_data else 0
+                
+                # Xác định hướng video
+                # Lưu ý: Douyin API có thể trả về width và height theo hướng thực tế của video
+                # Nếu height > width: video dọc (vertical/portrait)
+                # Nếu width > height: video ngang (horizontal/landscape)
+                orientation = 'unknown'
+                if width > 0 and height > 0:
+                    # Log để debug
+                    self.log('info', f"Video {video_id}: width={width}, height={height}, ratio={height/width if width > 0 else 0:.2f}")
+                    if height > width:
+                        orientation = 'vertical'  # 縦向き (dọc)
+                    elif width > height:
+                        orientation = 'horizontal'  # 横向き (ngang)
+                    else:
+                        orientation = 'square'  # 正方形
+                    self.log('info', f"Video {video_id}: orientation={orientation} (width={width}, height={height})")
+                
                 video_info = {
                     'video_id': video_id,
                     'title': aweme.get('desc', ''),
                     'author': aweme.get('author', {}).get('nickname', ''),
+                    'width': width,
+                    'height': height,
+                    'orientation': orientation,
                     'video_url': None
                 }
                 
                 # JavaScriptコードの方法: video.video.play_addr.url_list[0] または video.video.download_addr.url_list[0]
-                video_data = aweme.get('video', {})
                 if video_data:
                     # Lấy tất cả các URL có sẵn
                     all_urls = []
@@ -417,14 +441,35 @@ class VideoDownloader:
                 if aweme_list and len(aweme_list) > 0:
                     # 最初のビデオを取得
                     aweme = aweme_list[0]
+                    
+                    # Lấy width và height để xác định hướng video
+                    video_data = aweme.get('video', {})
+                    width = video_data.get('width', 0) if video_data else 0
+                    height = video_data.get('height', 0) if video_data else 0
+                    
+                    # Xác định hướng video
+                    orientation = 'unknown'
+                    if width > 0 and height > 0:
+                        # Log để debug
+                        self.log('info', f"Video (aweme_list): width={width}, height={height}, ratio={height/width if width > 0 else 0:.2f}")
+                        if height > width:
+                            orientation = 'vertical'  # 縦向き (dọc)
+                        elif width > height:
+                            orientation = 'horizontal'  # 横向き (ngang)
+                        else:
+                            orientation = 'square'  # 正方形
+                        self.log('info', f"Video (aweme_list): orientation={orientation} (width={width}, height={height})")
+                    
                     video_info = {
                         'video_id': video_id,
                         'title': aweme.get('desc', ''),
                         'author': aweme.get('author', {}).get('nickname', ''),
+                        'width': width,
+                        'height': height,
+                        'orientation': orientation,
                         'video_url': None
                     }
                     
-                    video_data = aweme.get('video', {})
                     if video_data:
                         # Lấy tất cả các URL có sẵn (giống như aweme_detail)
                         all_urls = []
@@ -490,15 +535,15 @@ class VideoDownloader:
             Dict chứa thông tin video hoặc None
         """
         try:
-            print(f"Đang lấy HTML từ: {url}")
+            self.log('info', f"Đang lấy HTML từ: {url}")
             response = self.session.get(url, timeout=15)
             
             if response.status_code != 200:
-                print(f"Không thể lấy HTML. Status: {response.status_code}")
+                self.log('warning', f"Không thể lấy HTML. Status: {response.status_code}")
                 return None
             
             html_content = response.text
-            print(f"HTML length: {len(html_content)}")
+            self.log('info', f"HTML length: {len(html_content)}")
             
             # Tìm video URL trong HTML
             # Pattern 1: Tìm trong script tag với JSON data
@@ -553,7 +598,7 @@ class VideoDownloader:
             # Nếu vẫn chưa tìm thấy, thử tìm trực tiếp trong HTML
             if not video_url:
                 # Trước tiên, thử tìm trong RENDER_DATA hoặc window data
-                print("Đang tìm kiếm trong RENDER_DATA và window data...")
+                self.log('info', "Đang tìm kiếm trong RENDER_DATA và window data...")
                 render_data_patterns = [
                     r'<script[^>]*id="RENDER_DATA"[^>]*>(.+?)</script>',
                     r'window\._UNIVERSAL_DATA\s*=\s*({.+?});',
@@ -658,7 +703,7 @@ class VideoDownloader:
                 
                 # Nếu vẫn chưa tìm thấy, thử tìm tất cả URL pattern（最後の手段）
                 if not video_url:
-                    print("Đang tìm kiếm tất cả URL trong HTML (最後の手段)...")
+                    self.log('info', "Đang tìm kiếm tất cả URL trong HTML (最後の手段)...")
                     all_urls = []
                     direct_patterns = [
                         r'https://[^"\'<>\s]+\.mp4[^"\'<>\s]*',
@@ -669,7 +714,7 @@ class VideoDownloader:
                         matches = re.findall(pattern, html_content)
                         all_urls.extend(matches)
                     
-                    print(f"Tìm thấy {len(all_urls)} URL trong HTML")
+                    self.log('info', f"Tìm thấy {len(all_urls)} URL trong HTML")
                     
                     # Loại bỏ các URL không hợp lệ
                     valid_urls = []
@@ -696,16 +741,16 @@ class VideoDownloader:
                     if valid_urls:
                         # Lấy URL đầu tiên (ưu tiên có video ID hoặc aweme)
                         video_url = valid_urls[0]
-                        print(f"Tìm thấy {len(valid_urls)} URL hợp lệ, chọn: {video_url[:150]}...")
+                        self.log('info', f"Tìm thấy {len(valid_urls)} URL hợp lệ, chọn: {video_url[:150]}...")
                     else:
-                        print("Không tìm thấy URL hợp lệ trong HTML (tất cả đều bị loại trừ)")
-                        print("WARNING: Không thể tìm thấy video URL hợp lệ từ HTML!")
-                        print("Có thể cần cookie mới hoặc video không khả dụng.")
+                        self.log('warning', "Không tìm thấy URL hợp lệ trong HTML (tất cả đều bị loại trừ)")
+                        self.log('warning', "WARNING: Không thể tìm thấy video URL hợp lệ từ HTML!")
+                        self.log('warning', "Có thể cần cookie mới hoặc video không khả dụng.")
                         # Debug: hiển thị một số URL để kiểm tra
                         if all_urls:
-                            print(f"Tất cả URL tìm thấy (để debug):")
+                            self.log('debug', f"Tất cả URL tìm thấy (để debug):")
                             for i, url in enumerate(all_urls[:5]):  # Chỉ hiển thị 5 URL đầu
-                                print(f"  {i+1}. {url[:100]}...")
+                                self.log('debug', f"  {i+1}. {url[:100]}...")
                 
                 # Nếu vẫn không tìm thấy, thử tìm trong JSON string
                 if not video_url:
@@ -746,26 +791,44 @@ class VideoDownloader:
                 
                 # Kiểm tra URL hợp lệ
                 if not video_url.startswith('http'):
-                    print(f"URL không hợp lệ (không bắt đầu bằng http): {video_url[:100]}")
+                    self.log('warning', f"URL không hợp lệ (không bắt đầu bằng http): {video_url[:100]}")
                     video_url = None
                 elif len(video_url) < 20:
-                    print(f"URL quá ngắn: {video_url}")
+                    self.log('warning', f"URL quá ngắn: {video_url}")
                     video_url = None
                 
                 if video_url:
-                    print(f"Tìm thấy video URL trong HTML: {video_url[:150]}...")
-                    print(f"Video URL length: {len(video_url)}")
+                    self.log('info', f"Tìm thấy video URL trong HTML: {video_url[:150]}...")
+                    self.log('info', f"Video URL length: {len(video_url)}")
+                    
+                    # HTMLからauthor情報も取得を試みる
+                    author_from_html = 'Unknown'
+                    try:
+                        # RENDER_DATAからauthor情報を取得
+                        author_patterns = [
+                            r'"nickname"\s*:\s*"([^"]+)"',
+                            r'"unique_id"\s*:\s*"([^"]+)"',
+                            r'"author".*?"nickname"\s*:\s*"([^"]+)"',
+                        ]
+                        for pattern in author_patterns:
+                            match = re.search(pattern, html_content)
+                            if match:
+                                author_from_html = match.group(1)
+                                self.log('info', f"Tìm thấy author từ HTML: {author_from_html}")
+                                break
+                    except Exception as e:
+                        self.log('warning', f"Không thể lấy author từ HTML: {e}")
                     
                     return {
                         'video_id': video_id,
                         'title': '',
-                        'author': '',
+                        'author': author_from_html,
                         'video_url': video_url
                     }
             
             # Nếu vẫn không tìm thấy, thử tìm trong window._UNIVERSAL_DATA hoặc tương tự
             if not video_url:
-                print("Đang tìm kiếm trong window data...")
+                self.log('info', "Đang tìm kiếm trong window data...")
                 window_patterns = [
                     r'window\._UNIVERSAL_DATA\s*=\s*({.+?});',
                     r'window\._SSR_HYDRATED_DATA\s*=\s*({.+?});',
@@ -783,11 +846,21 @@ class VideoDownloader:
                                 data = json.loads(decoded)
                                 video_url = self._extract_video_url_from_json(data, video_id)
                                 if video_url:
-                                    print(f"Tìm thấy video URL trong window data: {video_url[:150]}...")
+                                    self.log('info', f"Tìm thấy video URL trong window data: {video_url[:150]}...")
+                                    
+                                    # JSONからauthor情報も取得を試みる
+                                    author_from_json = 'Unknown'
+                                    try:
+                                        author_from_json = self._extract_author_from_json(data)
+                                        if author_from_json:
+                                            self.log('info', f"Tìm thấy author từ JSON: {author_from_json}")
+                                    except Exception as e:
+                                        self.log('warning', f"Không thể lấy author từ JSON: {e}")
+                                    
                                     return {
                                         'video_id': video_id,
                                         'title': '',
-                                        'author': '',
+                                        'author': author_from_json,
                                         'video_url': video_url
                                     }
                             except Exception as e:
@@ -796,24 +869,67 @@ class VideoDownloader:
                                     data = json.loads(match)
                                     video_url = self._extract_video_url_from_json(data, video_id)
                                     if video_url:
-                                        print(f"Tìm thấy video URL trong window data: {video_url[:150]}...")
+                                        self.log('info', f"Tìm thấy video URL trong window data: {video_url[:150]}...")
+                                        
+                                        # JSONからauthor情報も取得を試みる
+                                        author_from_json = 'Unknown'
+                                        try:
+                                            author_from_json = self._extract_author_from_json(data)
+                                            if author_from_json:
+                                                self.log('info', f"Tìm thấy author từ JSON: {author_from_json}")
+                                        except Exception as e:
+                                            self.log('warning', f"Không thể lấy author từ JSON: {e}")
+                                        
                                         return {
                                             'video_id': video_id,
                                             'title': '',
-                                            'author': '',
+                                            'author': author_from_json,
                                             'video_url': video_url
                                         }
                                 except Exception as e2:
                                     pass
             
-            print("Không tìm thấy video URL trong HTML")
+            self.log('warning', "Không tìm thấy video URL trong HTML")
             return None
                 
         except Exception as e:
-            print(f"Lỗi khi lấy thông tin từ HTML: {e}")
-            import traceback
-            traceback.print_exc()
+            self.log('error', f"Lỗi khi lấy thông tin từ HTML: {e}", exc_info=True)
             return None
+    
+    def _extract_author_from_json(self, data: dict, depth: int = 0, max_depth: int = 5) -> Optional[str]:
+        """Recursively tìm author (nickname) trong JSON data"""
+        if depth > max_depth:
+            return None
+        
+        if not isinstance(data, dict):
+            return None
+        
+        # 優先的にチェックするキー
+        priority_keys = ['author', 'user', 'nickname', 'unique_id']
+        for key in priority_keys:
+            if key in data:
+                value = data[key]
+                if isinstance(value, dict):
+                    # authorオブジェクトの場合、nicknameを探す
+                    if 'nickname' in value:
+                        return value['nickname']
+                    elif 'unique_id' in value:
+                        return value['unique_id']
+                    # 再帰的に探す
+                    result = self._extract_author_from_json(value, depth + 1, max_depth)
+                    if result:
+                        return result
+                elif isinstance(value, str) and value:
+                    return value
+        
+        # すべてのキーを再帰的に探す
+        for key, value in data.items():
+            if isinstance(value, (dict, list)):
+                result = self._extract_author_from_json(value if isinstance(value, dict) else (value[0] if value and isinstance(value[0], dict) else {}), depth + 1, max_depth)
+                if result:
+                    return result
+        
+        return None
     
     def _extract_video_url_from_json(self, data: dict, video_id: str = None, depth: int = 0, max_depth: int = 10) -> Optional[str]:
         """Recursively tìm video URL trong JSON data"""
@@ -1048,12 +1164,13 @@ class VideoDownloader:
             traceback.print_exc()
             return None
     
-    def get_all_videos_from_user(self, user_url: str) -> List[str]:
+    def get_all_videos_from_user(self, user_url: str, progress_callback=None) -> List[str]:
         """
         Lấy tất cả video URL từ user profile (giống như JavaScript code)
         
         Args:
             user_url: URL user profile (ví dụ: https://www.douyin.com/user/MS4wLjABAAAA...)
+            progress_callback: Callback function để cập nhật tiến trình (current, total, message)
             
         Returns:
             List các video URL
@@ -1065,22 +1182,33 @@ class VideoDownloader:
             import re
             match = re.search(r'/user/([^/?]+)', user_url)
             if not match:
+                if progress_callback:
+                    progress_callback(0, 0, f"Không thể trích xuất user ID từ URL: {user_url}")
                 print(f"Không thể trích xuất user ID từ URL: {user_url}")
                 return []
             
             sec_user_id = match.group(1)
+            self.log('info', f"User ID extracted: {sec_user_id}")
             print(f"User ID: {sec_user_id}")
+            
+            if progress_callback:
+                progress_callback(0, 0, f"Đang kết nối với user ID: {sec_user_id}...")
             
             has_more = 1
             max_cursor = 0
             error_count = 0
+            page_count = 0
             
             while has_more == 1 and error_count < 5:
                 try:
+                    page_count += 1
                     # API endpoint giống như JavaScript code
                     api_url = f"https://www.douyin.com/aweme/v1/web/aweme/post/?device_platform=webapp&aid=6383&channel=channel_pc_web&sec_user_id={sec_user_id}&max_cursor={max_cursor}&count=20&version_code=170400&version_name=17.4.0"
                     
-                    print(f"Đang lấy video (max_cursor={max_cursor}), đã tìm thấy {len(video_urls)} video...")
+                    message = f"Đang tải trang {page_count}... (Đã tìm thấy {len(video_urls)} video)"
+                    if progress_callback:
+                        progress_callback(len(video_urls), 0, message)
+                    print(message)
                     
                     response = self.session.get(api_url, timeout=15)
                     
@@ -1093,7 +1221,16 @@ class VideoDownloader:
                     
                     data = response.json()
                     
+                    # Log thông tin response để debug
+                    if data:
+                        self.log('debug', f"API response keys: {list(data.keys())}")
+                        if 'aweme_list' in data:
+                            self.log('info', f"Tìm thấy {len(data['aweme_list'])} video trong trang {page_count}")
+                        else:
+                            self.log('warning', f"Response không có 'aweme_list', keys: {list(data.keys())}")
+                    
                     if not data or 'aweme_list' not in data:
+                        self.log('warning', "Không tìm thấy video data, thử lại...")
                         print("Không tìm thấy video data, thử lại...")
                         error_count += 1
                         import time
@@ -1104,47 +1241,110 @@ class VideoDownloader:
                     has_more = data.get('has_more', 0)
                     max_cursor = data.get('max_cursor', 0)
                     
+                    self.log('info', f"Trang {page_count}: has_more={has_more}, max_cursor={max_cursor}, videos_in_page={len(data['aweme_list'])}")
+                    
                     # Extract video URLs
-                    for video in data['aweme_list']:
+                    videos_in_page = len(data.get('aweme_list', []))
+                    for idx, video in enumerate(data['aweme_list']):
                         # Lấy video ID để tạo video page URL (giống như JavaScript code)
                         aweme_id = video.get('aweme_id', '')
-                        if aweme_id:
-                            # Tạo video page URL thay vì direct video URL
-                            # Vì direct video URL có thể hết hạn, nên dùng video page URL
-                            video_page_url = f"https://www.douyin.com/video/{aweme_id}"
-                            video_urls.append(video_page_url)
-                            print(f"  Thêm video: {video_page_url}")
                         
-                        # Nếu muốn lấy direct video URL (có thể hết hạn), uncomment phần dưới
-                        # video_url = ""
-                        # if video.get('video') and video['video'].get('play_addr'):
-                        #     url_list = video['video']['play_addr'].get('url_list', [])
-                        #     if url_list:
-                        #         video_url = url_list[0]
-                        # elif video.get('video') and video['video'].get('download_addr'):
-                        #     url_list = video['video']['download_addr'].get('url_list', [])
-                        #     if url_list:
-                        #         video_url = url_list[0]
-                        # 
-                        # if video_url:
-                        #     # HTTPをHTTPSに変換
-                        #     if not video_url.startswith("https"):
-                        #         video_url = video_url.replace("http", "https")
-                        #     video_urls.append(video_url)
+                        # Lấy thông tin author để xác minh
+                        author_info = video.get('author', {})
+                        author_nickname = author_info.get('nickname', 'Unknown')
+                        author_unique_id = author_info.get('unique_id', '')
+                        author_uid = author_info.get('uid', '')
+                        
+                        # Lấy thông tin video
+                        desc = video.get('desc', '')[:50]  # Lấy 50 ký tự đầu của mô tả
+                        
+                        if aweme_id:
+                            # Lấy width và height để xác định hướng video
+                            video_data = video.get('video', {})
+                            width = video_data.get('width', 0) if video_data else 0
+                            height = video_data.get('height', 0) if video_data else 0
+                            
+                            # Xác định hướng video
+                            orientation = 'unknown'
+                            if width > 0 and height > 0:
+                                # Log để debug
+                                self.log('info', f"Video {aweme_id} (get_all_videos_from_user): width={width}, height={height}, ratio={height/width if width > 0 else 0:.2f}")
+                                if height > width:
+                                    orientation = 'vertical'  # 縦向き (dọc)
+                                elif width > height:
+                                    orientation = 'horizontal'  # 横向き (ngang)
+                                else:
+                                    orientation = 'square'  # 正方形
+                                self.log('info', f"Video {aweme_id} (get_all_videos_from_user): orientation={orientation} (width={width}, height={height})")
+                            
+                            # Log thông tin video để debug
+                            self.log('info', f"Video {len(video_urls)+1}: aweme_id={aweme_id}, orientation={orientation} ({width}x{height}), author={author_nickname} (@{author_unique_id}), desc={desc}")
+                            
+                            # Thử lấy direct video URL trước (giống như douyin-video-links1.txt)
+                            video_url = None
+                            
+                            if video_data:
+                                # Thử play_addr trước
+                                play_addr = video_data.get('play_addr', {})
+                                if play_addr:
+                                    url_list = play_addr.get('url_list', [])
+                                    if url_list:
+                                        video_url = url_list[0]
+                                        # HTTPをHTTPSに変換
+                                        if not video_url.startswith("https"):
+                                            video_url = video_url.replace("http", "https")
+                                
+                                # Nếu không có play_addr, thử download_addr
+                                if not video_url:
+                                    download_addr = video_data.get('download_addr', {})
+                                    if download_addr:
+                                        url_list = download_addr.get('url_list', [])
+                                        if url_list:
+                                            video_url = url_list[0]
+                                            if not video_url.startswith("https"):
+                                                video_url = video_url.replace("http", "https")
+                            
+                            # Nếu có direct video URL, sử dụng nó (giống như douyin-video-links1.txt)
+                            if video_url:
+                                self.log('info', f"Tìm thấy direct video URL cho aweme_id={aweme_id}: {video_url[:100]}...")
+                                video_urls.append(video_url)
+                                print(f"  Thêm video (direct URL): {video_url[:100]}... (Author: {author_nickname})")
+                            else:
+                                # Nếu không có direct URL, sử dụng video page URL (fallback)
+                                video_page_url = f"https://www.douyin.com/video/{aweme_id}"
+                                video_urls.append(video_page_url)
+                                self.log('warning', f"Không tìm thấy direct video URL cho aweme_id={aweme_id}, sử dụng video page URL: {video_page_url}")
+                                print(f"  Thêm video (page URL): {video_page_url} (Author: {author_nickname})")
+                            
+                            # Cập nhật tiến trình cho từng video
+                            if progress_callback:
+                                message = f"Đang xử lý video {len(video_urls)}... (Trang {page_count}, Video {idx+1}/{videos_in_page}, Author: {author_nickname})"
+                                progress_callback(len(video_urls), 0, message)
                     
                     print(f"Đã tìm thấy {len(video_urls)} video")
+                    
+                    # Cập nhật tiến trình sau khi xử lý xong trang
+                    if progress_callback:
+                        message = f"Đã tải xong trang {page_count}... (Tổng: {len(video_urls)} video)"
+                        progress_callback(len(video_urls), 0, message)
                     
                     # Delay giữa các request
                     import time
                     time.sleep(1)
                     
                 except Exception as e:
-                    print(f"Lỗi khi lấy video: {e}")
+                    error_msg = f"Lỗi khi lấy video: {e}"
+                    print(error_msg)
+                    if progress_callback:
+                        progress_callback(len(video_urls), 0, f"Lỗi: {error_msg}, đang thử lại...")
                     error_count += 1
                     import time
                     time.sleep(3)
             
-            print(f"Hoàn thành! Tổng cộng {len(video_urls)} video")
+            final_message = f"Hoàn thành! Tổng cộng {len(video_urls)} video"
+            print(final_message)
+            if progress_callback:
+                progress_callback(len(video_urls), len(video_urls), final_message)
             return video_urls
             
         except Exception as e:
@@ -1235,7 +1435,48 @@ class VideoDownloader:
             print(f"Lỗi không xác định khi tải: {e}")
             return False
     
-    def process_video(self, url: str, download_folder: str, naming_mode: str = "video_id", video_format: str = "auto") -> Dict:
+    def _get_video_orientation_from_file(self, file_path: str) -> str:
+        """
+        ビデオファイルのメタデータから向きを取得
+        
+        Args:
+            file_path: ビデオファイルのパス
+            
+        Returns:
+            'vertical', 'horizontal', 'square', または 'unknown'
+        """
+        try:
+            import cv2
+            cap = cv2.VideoCapture(file_path)
+            if not cap.isOpened():
+                self.log('warning', f"Không thể mở video file: {file_path}")
+                return 'unknown'
+            
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            cap.release()
+            
+            if width > 0 and height > 0:
+                # Log để debug
+                self.log('info', f"Video file {file_path}: width={width}, height={height}, ratio={height/width if width > 0 else 0:.2f}")
+                if height > width:
+                    orientation = 'vertical'  # 縦向き (dọc)
+                elif width > height:
+                    orientation = 'horizontal'  # 横向き (ngang)
+                else:
+                    orientation = 'square'  # 正方形
+                self.log('info', f"Video file {file_path}: orientation={orientation} (width={width}, height={height})")
+                return orientation
+            else:
+                return 'unknown'
+        except ImportError:
+            self.log('warning', "opencv-python chưa được cài đặt, không thể lấy metadata từ file")
+            return 'unknown'
+        except Exception as e:
+            self.log('error', f"Lỗi khi lấy metadata từ file {file_path}: {e}")
+            return 'unknown'
+    
+    def process_video(self, url: str, download_folder: str, naming_mode: str = "video_id", video_format: str = "auto", orientation_filter: str = "all") -> Dict:
         """
         Xử lý một video từ URL đến file đã tải
         
@@ -1244,6 +1485,7 @@ class VideoDownloader:
             download_folder: Thư mục lưu file
             naming_mode: Chế độ đặt tên ("video_id" hoặc "timestamp")
             video_format: Định dạng video ("highest", "high", "medium", "low", "auto")
+            orientation_filter: Lọc theo hướng video ("all", "vertical", "horizontal")
             
         Returns:
             Dict chứa kết quả: {
@@ -1271,6 +1513,7 @@ class VideoDownloader:
             print(f"URL sau khi normalize: {normalized_url}")
             
             # Bước 2: Lấy thông tin video
+            self.log('info', f"Đang lấy thông tin video từ URL: {normalized_url}")
             video_info = self.get_video_info(normalized_url)
             if not video_info:
                 # Nếu normalizeされたURLが短縮URLと異なる場合、既に解決済みなので
@@ -1280,6 +1523,36 @@ class VideoDownloader:
             
             video_id = video_info.get('video_id')
             author = video_info.get('author', 'Unknown')
+            title = video_info.get('title', 'N/A')
+            orientation = video_info.get('orientation', 'unknown')
+            width = video_info.get('width', 0)
+            height = video_info.get('height', 0)
+            
+            # Log thông tin video để debug
+            self.log('info', f"Video info retrieved - video_id={video_id}, author={author}, orientation={orientation} ({width}x{height}), title={title[:50] if title else 'N/A'}")
+            self.log('info', f"Video info keys: {list(video_info.keys())}")
+            
+            # Kiểm tra orientation filter
+            # 直接ビデオURLの場合、orientationはunknownになるが、ダウンロード後に判定する
+            # そのため、直接ビデオURLの場合は、ここではフィルタをスキップし、ダウンロード後に判定する
+            is_direct_video_url = (video_info.get('video_id') is None and 
+                                  video_info.get('title') == 'Direct Video')
+            
+            if orientation_filter != "all":
+                if orientation != "unknown":
+                    # APIから取得したorientationがある場合、ここでフィルタを適用
+                    if orientation != orientation_filter:
+                        result['error'] = f"Video orientation ({orientation}) không khớp với filter ({orientation_filter})"
+                        self.log('info', f"Bỏ qua video {video_id} vì orientation ({orientation}) không khớp với filter ({orientation_filter})")
+                        return result
+                    else:
+                        self.log('info', f"Video {video_id} phù hợp với orientation filter: {orientation_filter}")
+                elif is_direct_video_url:
+                    # 直接ビデオURLの場合、ダウンロード後に判定する
+                    self.log('info', f"Video {video_id} là direct video URL, sẽ kiểm tra orientation sau khi tải")
+                else:
+                    # orientationがunknownで、直接ビデオURLでもない場合
+                    self.log('warning', f"Video {video_id} có orientation=unknown, không thể áp dụng filter")
             
             # Chọn video URL dựa trên format được chọn
             video_url = self._select_video_url(video_info, video_format)
@@ -1291,7 +1564,19 @@ class VideoDownloader:
             result['video_id'] = video_id
             result['author'] = author
             
-            # Bước 3: Tạo thư mục theo tên người dùng
+            # Bước 3: Kiểm tra orientation filter (nếu orientation là unknown で、direct video URLの場合)
+            # 直接ビデオURLの場合、ダウンロード後にメタデータから向きを判定する必要がある
+            # フィルタが設定されている場合、ダウンロード後に判定して、一致しない場合は削除する
+            is_direct_video_url = (video_info.get('video_id') is None and 
+                                  video_info.get('title') == 'Direct Video')
+            needs_orientation_check_after_download = (orientation == 'unknown' and 
+                                                      is_direct_video_url and
+                                                      orientation_filter != "all")
+            
+            if needs_orientation_check_after_download:
+                self.log('info', f"Video là direct URL, sẽ kiểm tra orientation sau khi tải (filter: {orientation_filter})")
+            
+            # Bước 4: Tạo thư mục theo tên người dùng
             # Làm sạch tên người dùng (loại bỏ ký tự không hợp lệ cho tên thư mục)
             import re
             safe_author = re.sub(r'[<>:"/\\|?*]', '_', author.strip())
@@ -1314,7 +1599,30 @@ class VideoDownloader:
             file_path = os.path.join(user_folder, filename)
             
             # Bước 5: Tải video
-            if self.download_video(video_url, file_path):
+            success = self.download_video(video_url, file_path)
+            
+            if success:
+                # 直接ビデオURLの場合、ダウンロード後にメタデータから向きを判定する
+                if needs_orientation_check_after_download:
+                    actual_orientation = self._get_video_orientation_from_file(file_path)
+                    self.log('info', f"Video {file_path} - actual_orientation={actual_orientation}, filter={orientation_filter}")
+                    if actual_orientation != 'unknown' and actual_orientation != orientation_filter:
+                        # フィルタに一致しない場合は削除
+                        try:
+                            os.remove(file_path)
+                            self.log('info', f"Đã xóa video {file_path} vì orientation ({actual_orientation}) không khớp với filter ({orientation_filter})")
+                        except Exception as e:
+                            self.log('error', f"Không thể xóa file: {e}")
+                        result['error'] = f"Video orientation ({actual_orientation}) không khớp với filter ({orientation_filter})"
+                        result['success'] = False
+                        return result
+                    elif actual_orientation != 'unknown':
+                        # フィルタに一致する場合は、orientationを更新
+                        orientation = actual_orientation
+                        self.log('info', f"Video {file_path} có orientation: {orientation} (từ file metadata) - phù hợp với filter")
+                    else:
+                        self.log('warning', f"Không thể xác định orientation từ file {file_path}, giữ lại file")
+                
                 result['success'] = True
                 result['file_path'] = file_path
             else:

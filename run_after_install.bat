@@ -91,6 +91,34 @@ if errorlevel 1 (
     echo.
 )
 
+REM Kiểm tra opencv-python
+!PYTHON_EXE! -c "import cv2" >nul 2>&1
+if errorlevel 1 (
+    echo [INFO] Đang cài đặt opencv-python...
+    echo.
+    REM Cài đặt numpy trước (nếu cần)
+    !PYTHON_EXE! -c "import numpy" >nul 2>&1
+    if errorlevel 1 (
+        echo [INFO] Đang cài đặt numpy...
+        !PYTHON_EXE! -m pip install numpy --only-binary :all:
+    )
+    REM Cài đặt opencv-python
+    !PYTHON_EXE! -m pip install opencv-python --only-binary :all:
+    if errorlevel 1 (
+        echo.
+        echo [WARNING] Không thể cài đặt opencv-python!
+        echo Tính năng lọc video theo hướng có thể không hoạt động đầy đủ.
+        echo.
+    ) else (
+        echo.
+        echo [INFO] Đã cài đặt opencv-python thành công!
+        echo.
+    )
+) else (
+    echo [INFO] opencv-python đã sẵn sàng!
+    echo.
+)
+
 REM Chạy ứng dụng
 echo [INFO] Đang khởi động ứng dụng...
 echo.

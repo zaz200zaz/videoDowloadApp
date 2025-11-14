@@ -34,6 +34,7 @@ class DownloadService:
         download_folder: str,
         naming_mode: str = "video_id",
         video_format: str = "auto",
+        orientation_filter: str = "all",
         progress_callback: Optional[Callable[[float, int, int], None]] = None,
         result_callback: Optional[Callable[[Dict], None]] = None,
         complete_callback: Optional[Callable[[], None]] = None
@@ -69,7 +70,7 @@ class DownloadService:
         # ダウンロードスレッドを開始
         self.download_thread = threading.Thread(
             target=self._download_worker,
-            args=(links, download_folder, naming_mode, video_format, 
+            args=(links, download_folder, naming_mode, video_format, orientation_filter,
                   progress_callback, result_callback, complete_callback),
             daemon=True
         )
@@ -81,6 +82,7 @@ class DownloadService:
         download_folder: str,
         naming_mode: str,
         video_format: str,
+        orientation_filter: str,
         progress_callback: Optional[Callable[[float, int, int], None]],
         result_callback: Optional[Callable[[Dict], None]],
         complete_callback: Optional[Callable[[], None]]
@@ -115,7 +117,7 @@ class DownloadService:
                 break
             
             result = self.downloader.process_video(
-                link, download_folder, naming_mode, video_format
+                link, download_folder, naming_mode, video_format, orientation_filter
             )
             
             # 処理後に再度停止シグナルをチェック

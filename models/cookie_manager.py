@@ -27,7 +27,9 @@ class CookieManager:
                 "settings": {
                     "naming_mode": "video_id",  # "video_id" hoặc "timestamp"
                     "max_concurrent": 3,
-                    "video_format": "auto"  # "highest", "high", "medium", "low", "auto"
+                    "video_format": "auto",  # "highest", "high", "medium", "low", "auto"
+                    "orientation_filter": "all",  # "all", "vertical", "horizontal"
+                    "orientation_swap": False  # True nếu width/height bị đảo ngược trong API response
                 }
             }
             self._save_config(default_config)
@@ -187,7 +189,8 @@ class CookieManager:
                 "settings": {
                     "naming_mode": "video_id",
                     "max_concurrent": 3,
-                    "video_format": "auto"
+                    "video_format": "auto",
+                    "orientation_filter": "all"
                 }
             }
             self._save_config(default_config)
