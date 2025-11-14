@@ -1,0 +1,9 @@
+{
+  "cookie": "",
+  "download_folder": "./downloads",
+  "settings": {
+    "naming_mode": "video_id",
+    "max_concurrent": 3
+  }
+}
+
