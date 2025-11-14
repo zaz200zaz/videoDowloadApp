@@ -68,6 +68,9 @@ class MainWindow:
         cookie_buttons = ttk.Frame(cookie_frame)
         cookie_buttons.grid(row=2, column=0, sticky=tk.W, pady=5)
         
+        self.load_cookie_btn = ttk.Button(cookie_buttons, text="Chọn file Cookie", command=self._load_cookie_from_file)
+        self.load_cookie_btn.pack(side=tk.LEFT, padx=5)
+        
         self.save_cookie_btn = ttk.Button(cookie_buttons, text="Lưu Cookie", command=self._save_cookie)
         self.save_cookie_btn.pack(side=tk.LEFT, padx=5)
         
@@ -155,6 +158,71 @@ class MainWindow:
         if cookie:
             self.cookie_text.insert('1.0', cookie)
             self.cookie_status_label.config(text="✓ Đã tải cookie đã lưu", foreground="green")
+    
+    def _load_cookie_from_file(self):
+        """Tải cookie từ file"""
+        file_path = filedialog.askopenfilename(
+            title="Chọn file Cookie",
+            filetypes=[
+                ("Text files", "*.txt"),
+                ("JSON files", "*.json"),
+                ("All files", "*.*")
+            ]
+        )
+        
+        if not file_path:
+            return
+        
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+            
+            if not content:
+                messagebox.showwarning("Cảnh báo", "File rỗng!")
+                return
+            
+            # Thử parse JSON nếu là file JSON
+            cookie_value = content
+            if file_path.lower().endswith('.json'):
+                try:
+                    import json
+                    data = json.loads(content)
+                    # Thử các key phổ biến
+                    if isinstance(data, dict):
+                        cookie_value = data.get('cookie', data.get('Cookie', data.get('COOKIE', content)))
+                        if cookie_value == content:
+                            # Nếu không tìm thấy key 'cookie', thử lấy toàn bộ dict và convert thành string
+                            cookie_value = str(data)
+                except json.JSONDecodeError:
+                    # Không phải JSON hợp lệ, dùng content gốc
+                    pass
+            
+            # Xóa nội dung cũ và thêm cookie mới
+            self.cookie_text.delete('1.0', tk.END)
+            self.cookie_text.insert('1.0', cookie_value)
+            
+            self.cookie_status_label.config(
+                text=f"✓ Đã tải cookie từ file: {os.path.basename(file_path)}",
+                foreground="green"
+            )
+            messagebox.showinfo("Thành công", f"Đã tải cookie từ file!\n\nFile: {os.path.basename(file_path)}")
+            
+        except UnicodeDecodeError:
+            # Thử với encoding khác
+            try:
+                with open(file_path, 'r', encoding='latin-1') as f:
+                    content = f.read().strip()
+                self.cookie_text.delete('1.0', tk.END)
+                self.cookie_text.insert('1.0', content)
+                self.cookie_status_label.config(
+                    text=f"✓ Đã tải cookie từ file: {os.path.basename(file_path)}",
+                    foreground="green"
+                )
+                messagebox.showinfo("Thành công", f"Đã tải cookie từ file!")
+            except Exception as e:
+                messagebox.showerror("Lỗi", f"Không thể đọc file với encoding khác: {e}")
+        except Exception as e:
+            messagebox.showerror("Lỗi", f"Không thể đọc file: {e}")
     
     def _save_cookie(self):
         """Lưu cookie"""
