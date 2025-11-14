@@ -1,0 +1,43 @@
+# Log files
+logs/
+*.log
+**/logs/
+**/*.log
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Application specific
+config.json
+downloads/
+*.bat
+*.txt
+!requirements.txt
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
