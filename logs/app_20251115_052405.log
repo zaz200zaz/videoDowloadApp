@@ -1,0 +1,13 @@
+2025-11-15 05:24:05 - App - INFO - ============================================================
+2025-11-15 05:24:05 - App - INFO - Douyin Video Downloader - Application Started
+2025-11-15 05:24:05 - App - INFO - Log file: C:\work\git\videoDowloadApp\logs\app_20251115_052405.log
+2025-11-15 05:24:05 - App - INFO - ============================================================
+2025-11-15 05:24:05 - App - INFO - Đang khởi tạo ứng dụng...
+2025-11-15 05:24:05 - App - INFO - Root window đã được tạo
+2025-11-15 05:24:05 - App - INFO - CookieManager đã được khởi tạo
+2025-11-15 05:24:06 - App - INFO - MainWindow.__init__ - Bắt đầu khởi tạo UI
+2025-11-15 05:24:06 - App - INFO - MainWindow.__init__ - UI đã được thiết lập
+2025-11-15 05:24:06 - App - INFO - MainWindow.__init__ - Khởi tạo hoàn tất
+2025-11-15 05:24:06 - App - INFO - MainWindow đã được khởi tạo
+2025-11-15 05:24:06 - App - INFO - Ứng dụng sẵn sàng!
+2025-11-15 05:24:06 - App - INFO - Bắt đầu mainloop...

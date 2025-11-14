@@ -15,21 +15,25 @@ import logging
 class MainWindow:
     """Cửa sổ chính của ứng dụng"""
     
-    def __init__(self, root: tk.Tk, cookie_manager, downloader_class, logger=None):
+    def __init__(self, root: tk.Tk, cookie_manager, logger=None):
         """
         Khởi tạo MainWindow
         
         Args:
             root: Tkinter root window
             cookie_manager: CookieManager instance
-            downloader_class: VideoDownloader class
             logger: Logger instance (optional)
         """
         self.root = root
         self.cookie_manager = cookie_manager
-        self.downloader_class = downloader_class
-        self.downloader = None
         self.logger = logger or logging.getLogger('MainWindow')
+        
+        # Controllersを初期化
+        from controllers.cookie_controller import CookieController
+        from controllers.download_controller import DownloadController
+        
+        self.cookie_controller = CookieController(cookie_manager)
+        self.download_controller = DownloadController(cookie_manager)
         
         if self.logger:
             self.logger.info("MainWindow.__init__ - Bắt đầu khởi tạo UI")
@@ -147,13 +151,43 @@ class MainWindow:
         # Thêm sự kiện click để mở thư mục
         self.folder_path_label.bind("<Button-1>", lambda e: self._open_download_folder())
         
+        # Chọn định dạng video
+        format_frame = ttk.Frame(download_frame)
+        format_frame.grid(row=2, column=0, sticky=tk.W, pady=5)
+        
+        ttk.Label(format_frame, text="Định dạng video:").pack(side=tk.LEFT, padx=5)
+        saved_format = self.cookie_manager.get_setting("video_format", "auto")
+        # Tìm text tương ứng với saved_format
+        format_text = "Tự động (mặc định)"
+        format_options_map = {
+            "highest": "Chất lượng cao nhất",
+            "high": "Chất lượng cao",
+            "medium": "Chất lượng trung bình",
+            "low": "Chất lượng thấp",
+            "auto": "Tự động (mặc định)"
+        }
+        format_text = format_options_map.get(saved_format, "Tự động (mặc định)")
+        self.video_format_var = tk.StringVar(value=format_text)
+        format_options = [
+            ("Chất lượng cao nhất", "highest"),
+            ("Chất lượng cao", "high"),
+            ("Chất lượng trung bình", "medium"),
+            ("Chất lượng thấp", "low"),
+            ("Tự động (mặc định)", "auto")
+        ]
+        self.video_format_combo = ttk.Combobox(format_frame, textvariable=self.video_format_var, 
+                                               values=[opt[0] for opt in format_options], 
+                                               state="readonly", width=25)
+        self.video_format_combo.pack(side=tk.LEFT, padx=5)
+        self.video_format_combo.bind("<<ComboboxSelected>>", self._on_format_changed)
+        
         # Progress bar
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(download_frame, variable=self.progress_var, maximum=100, length=400)
-        self.progress_bar.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=5)
+        self.progress_bar.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=5)
         
         self.progress_label = ttk.Label(download_frame, text="Sẵn sàng")
-        self.progress_label.grid(row=3, column=0, sticky=tk.W, pady=2)
+        self.progress_label.grid(row=4, column=0, sticky=tk.W, pady=2)
         
         # ========== PHẦN 4: DANH SÁCH TRẠNG THÁI ==========
         status_frame = ttk.LabelFrame(main_frame, text="4. Trạng thái tải", padding="10")
@@ -231,86 +265,24 @@ class MainWindow:
         if self.logger:
             self.logger.info(f"Chọn file Cookie - File được chọn: {file_path}")
         
-        try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read().strip()
-            
-            if not content:
-                if self.logger:
-                    self.logger.warning("Chọn file Cookie - File rỗng, hiển thị cảnh báo")
-                messagebox.showwarning("Cảnh báo", "File rỗng!")
-                return
-            
-            cookie_value = content
-            
-            # Kiểm tra nếu là Netscape cookie format
-            if content.startswith('# Netscape HTTP Cookie File') or ('\t' in content and len(content.split('\t')) >= 7):
-                # Parse Netscape format
-                cookie_value = self.cookie_manager.parse_netscape_cookie_file(content)
-                if not cookie_value:
-                    if self.logger:
-                        self.logger.warning("Chọn file Cookie - Không thể parse Netscape cookie file, hiển thị cảnh báo")
-                    messagebox.showwarning("Cảnh báo", "Không thể parse Netscape cookie file!")
-                    return
-            
-            # Thử parse JSON nếu là file JSON
-            elif file_path.lower().endswith('.json'):
-                try:
-                    import json
-                    data = json.loads(content)
-                    # Thử các key phổ biến
-                    if isinstance(data, dict):
-                        cookie_value = data.get('cookie', data.get('Cookie', data.get('COOKIE', content)))
-                        if cookie_value == content:
-                            # Nếu không tìm thấy key 'cookie', thử lấy toàn bộ dict và convert thành string
-                            cookie_value = str(data)
-                except json.JSONDecodeError:
-                    # Không phải JSON hợp lệ, dùng content gốc
-                    pass
-            
-            # Nếu không phải Netscape hoặc JSON, giả sử là Header String format (key1=value1; key2=value2; ...)
-            # Header String format không cần xử lý đặc biệt, dùng trực tiếp
-            
-            # Xóa nội dung cũ và thêm cookie mới
+        # Controllerを使用してファイルから読み込み
+        success, message, cookie_value = self.cookie_controller.load_cookie_from_file(file_path)
+        
+        if success and cookie_value:
+            # UIを更新
             self.cookie_text.delete('1.0', tk.END)
             self.cookie_text.insert('1.0', cookie_value)
-            
             self.cookie_status_label.config(
                 text=f"✓ Đã tải cookie từ file: {os.path.basename(file_path)}",
                 foreground="green"
             )
             if self.logger:
-                self.logger.info(f"Chọn file Cookie - Thành công, đã tải cookie từ file: {os.path.basename(file_path)}")
-            messagebox.showinfo("Thành công", f"Đã tải cookie từ file!\n\nFile: {os.path.basename(file_path)}")
-            
-        except UnicodeDecodeError:
-            # Thử với encoding khác
-            try:
-                with open(file_path, 'r', encoding='latin-1') as f:
-                    content = f.read().strip()
-                
-                # Kiểm tra Netscape format
-                if content.startswith('# Netscape HTTP Cookie File') or ('\t' in content and len(content.split('\t')) >= 7):
-                    cookie_value = self.cookie_manager.parse_netscape_cookie_file(content)
-                else:
-                    # Header String format hoặc plain text
-                    cookie_value = content
-                
-                self.cookie_text.delete('1.0', tk.END)
-                self.cookie_text.insert('1.0', cookie_value)
-                self.cookie_status_label.config(
-                    text=f"✓ Đã tải cookie từ file: {os.path.basename(file_path)}",
-                    foreground="green"
-                )
-                messagebox.showinfo("Thành công", f"Đã tải cookie từ file!")
-            except Exception as e:
-                if self.logger:
-                    self.logger.error(f"Chọn file Cookie - Lỗi khi đọc file với encoding khác: {e}")
-                messagebox.showerror("Lỗi", f"Không thể đọc file với encoding khác: {e}")
-        except Exception as e:
+                self.logger.info(f"Chọn file Cookie - Thành công: {message}")
+            messagebox.showinfo("Thành công", f"{message}\n\nFile: {os.path.basename(file_path)}")
+        else:
             if self.logger:
-                self.logger.error(f"Chọn file Cookie - Lỗi khi đọc file: {e}")
-            messagebox.showerror("Lỗi", f"Không thể đọc file: {e}")
+                self.logger.error(f"Chọn file Cookie - {message}")
+            messagebox.showerror("Lỗi", message)
     
     def _save_cookie(self):
         """Lưu cookie"""
@@ -324,46 +296,19 @@ class MainWindow:
             messagebox.showwarning("Cảnh báo", "Vui lòng nhập cookie!")
             return
         
-        # Kiểm tra nếu là Netscape format, tự động convert
-        # Header String format (key1=value1; key2=value2; ...) không cần xử lý đặc biệt
-        if cookie.startswith('# Netscape HTTP Cookie File') or ('\t' in cookie and len(cookie.split('\t')) >= 7):
-            cookie = self.cookie_manager.parse_netscape_cookie_file(cookie)
-            if not cookie:
-                if self.logger:
-                    self.logger.error("Lưu Cookie - Không thể parse Netscape cookie file")
-                messagebox.showerror("Lỗi", "Không thể parse Netscape cookie file!")
-                return
-            # Cập nhật lại text box với cookie đã convert
-            self.cookie_text.delete('1.0', tk.END)
-            self.cookie_text.insert('1.0', cookie)
+        # Controllerを使用して保存
+        success, message = self.cookie_controller.save_cookie(cookie)
         
-        # Header String format đã sẵn sàng để sử dụng (key1=value1; key2=value2; ...)
-        # Không cần xử lý thêm
-        
-        if not self.cookie_manager.validate_cookie(cookie):
-            if self.logger:
-                self.logger.warning("Lưu Cookie - Cookie có vẻ không hợp lệ, hiển thị cảnh báo")
-            result = messagebox.askyesno(
-                "Cảnh báo",
-                "Cookie có vẻ không hợp lệ. Bạn có muốn tiếp tục lưu không?"
-            )
-            if not result:
-                if self.logger:
-                    self.logger.info("Lưu Cookie - Người dùng đã hủy do cookie không hợp lệ")
-                return
-            if self.logger:
-                self.logger.info("Lưu Cookie - Người dùng đã xác nhận lưu cookie không hợp lệ")
-        
-        if self.cookie_manager.save_cookie(cookie):
+        if success:
             if self.logger:
                 self.logger.info(f"Lưu Cookie - Thành công (length: {len(cookie)})")
             self.cookie_status_label.config(text="✓ Cookie đã được lưu", foreground="green")
-            messagebox.showinfo("Thành công", "Cookie đã được lưu thành công!")
+            messagebox.showinfo("Thành công", message)
         else:
             if self.logger:
-                self.logger.error("Lưu Cookie - Lỗi khi lưu cookie")
+                self.logger.error(f"Lưu Cookie - {message}")
             self.cookie_status_label.config(text="✗ Lỗi khi lưu cookie", foreground="red")
-            messagebox.showerror("Lỗi", "Không thể lưu cookie!")
+            messagebox.showerror("Lỗi", message)
     
     def _import_links(self):
         """Import danh sách link từ file .txt"""
@@ -671,6 +616,22 @@ class MainWindow:
             else:
                 messagebox.showerror("Lỗi", "Không thể reset app!")
     
+    def _on_format_changed(self, event=None):
+        """Xử lý khi người dùng thay đổi định dạng video"""
+        selected_format = self.video_format_var.get()
+        # Lưu setting
+        format_map = {
+            "Chất lượng cao nhất": "highest",
+            "Chất lượng cao": "high",
+            "Chất lượng trung bình": "medium",
+            "Chất lượng thấp": "low",
+            "Tự động (mặc định)": "auto"
+        }
+        format_value = format_map.get(selected_format, "auto")
+        self.cookie_manager.set_setting("video_format", format_value)
+        if self.logger:
+            self.logger.info(f"Định dạng video đã thay đổi: {selected_format} ({format_value})")
+    
     def _select_folder(self):
         """Chọn thư mục lưu video"""
         if self.logger:
@@ -748,19 +709,8 @@ class MainWindow:
         if self.logger:
             self.logger.info("User clicked: Xóa video đã tải button")
         
-        # Debug: Log tất cả results
-        if self.logger:
-            self.logger.debug(f"Xóa video - Tổng số results: {len(self.results)}")
-            for idx, r in enumerate(self.results):
-                self.logger.debug(f"Xóa video - Result {idx}: success={r.get('success')}, file_path={r.get('file_path')}")
-        
         # Kiểm tra xem có video nào đã tải thành công không
         successful_videos = [r for r in self.results if r.get('success') and r.get('file_path')]
-        
-        if self.logger:
-            self.logger.info(f"Xóa video - Tìm thấy {len(successful_videos)} video đã tải thành công")
-            for idx, v in enumerate(successful_videos):
-                self.logger.debug(f"Xóa video - Video {idx}: {v.get('file_path')}")
         
         if not successful_videos:
             if self.logger:
@@ -780,76 +730,20 @@ class MainWindow:
                 self.logger.info("Xóa video - Người dùng đã hủy")
             return
         
-        if self.logger:
-            self.logger.info(f"Xóa video - Bắt đầu xóa {len(successful_videos)} video")
+        # Controllerを使用して削除
+        deleted_count, failed_count, failed_files = self.download_controller.delete_downloaded_videos(self.results)
         
-        # Xóa các file
-        deleted_count = 0
-        failed_count = 0
-        failed_files = []
-        
+        # UIを更新
         for video_result in successful_videos:
             file_path = video_result.get('file_path')
-            if self.logger:
-                self.logger.debug(f"Xóa video - Kiểm tra file: {file_path}")
-                self.logger.debug(f"Xóa video - File exists: {os.path.exists(file_path) if file_path else False}")
-            
-            if not file_path:
-                if self.logger:
-                    self.logger.warning("Xóa video - file_path là None hoặc rỗng")
-                continue
-            
-            # Đảm bảo file_path là absolute path
-            if not os.path.isabs(file_path):
-                # Nếu là relative path, thử tìm trong download folder
-                download_folder = self.cookie_manager.get_download_folder()
-                if download_folder:
-                    file_path = os.path.join(download_folder, file_path)
-                    if self.logger:
-                        self.logger.debug(f"Xóa video - Chuyển đổi thành absolute path: {file_path}")
-            
-            if os.path.exists(file_path):
-                try:
-                    if self.logger:
-                        self.logger.info(f"Xóa video - Đang xóa file: {file_path}")
-                    os.remove(file_path)
-                    deleted_count += 1
-                    if self.logger:
-                        self.logger.info(f"Xóa video - Đã xóa thành công: {file_path}")
-                    
-                    # Cập nhật trạng thái trong treeview
-                    # Tìm item tương ứng trong treeview
-                    file_basename = os.path.basename(file_path)
-                    for item in self.status_tree.get_children():
-                        values = self.status_tree.item(item, 'values')
-                        if len(values) >= 3:
-                            # So sánh với basename hoặc full path
-                            if values[2] == file_basename or values[2] == file_path:
-                                self.status_tree.item(item, values=(values[0], 'Đã xóa', ''))
-                                if self.logger:
-                                    self.logger.debug(f"Xóa video - Đã cập nhật treeview item: {values[0]}")
-                                break
-                except Exception as e:
-                    failed_count += 1
-                    failed_files.append(file_path)
-                    if self.logger:
-                        self.logger.error(f"Xóa video - Lỗi khi xóa {file_path}: {e}", exc_info=True)
-            else:
-                if self.logger:
-                    self.logger.warning(f"Xóa video - File không tồn tại: {file_path}")
-                # File không tồn tại, nhưng vẫn đánh dấu là đã xóa (có thể đã bị xóa thủ công)
-                deleted_count += 1
-        
-        # Cập nhật results
-        for video_result in successful_videos:
-            if video_result.get('file_path') and os.path.exists(video_result.get('file_path')):
-                # File vẫn tồn tại (xóa thất bại)
-                pass
-            else:
-                # File đã được xóa
-                video_result['success'] = False
-                video_result['error'] = 'Đã xóa'
-                video_result['file_path'] = None
+            if file_path:
+                file_basename = os.path.basename(file_path)
+                for item in self.status_tree.get_children():
+                    values = self.status_tree.item(item, 'values')
+                    if len(values) >= 3:
+                        if values[2] == file_basename or values[2] == file_path:
+                            self.status_tree.item(item, values=(values[0], 'Đã xóa', ''))
+                            break
         
         # Hiển thị kết quả
         if failed_count == 0:
@@ -967,36 +861,13 @@ class MainWindow:
             messagebox.showwarning("Cảnh báo", "Vui lòng nhập ít nhất một link video!")
             return
         
-        # Khởi tạo downloader với logging
-        import os
-        from datetime import datetime
-        
-        # Tạo thư mục logs nếu chưa có (sử dụng script directory)
-        script_dir = os.path.dirname(os.path.abspath(__file__))
-        # Nếu script_dir là ui/, lên một cấp
-        if os.path.basename(script_dir) == 'ui':
-            script_dir = os.path.dirname(script_dir)
-        log_dir = os.path.join(script_dir, "logs")
-        os.makedirs(log_dir, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        log_file = os.path.join(log_dir, f"download_{timestamp}.log")
-        
-        self.downloader = self.downloader_class(cookie, log_file)
-        
-        # Hiển thị thông tin log file
-        self.downloader.log('info', f"Bắt đầu tải {len(links)} video")
-        self.downloader.log('info', f"Log file: {log_file}")
-        
-        # Hiển thị thông báo cho người dùng
-        messagebox.showinfo(
-            "Log File",
-            f"Log file đã được tạo:\n{log_file}\n\n"
-            f"Tất cả hoạt động sẽ được ghi vào file này."
-        )
+        # Controllerを使用してダウンロードを開始
+        success, error = self.download_controller.initialize_downloader(self.logger)
+        if not success:
+            messagebox.showerror("Lỗi", error)
+            return
         
         # Reset trạng thái
-        self.is_downloading = True
-        self.should_stop = False
         self.results = []
         self.status_tree.delete(*self.status_tree.get_children())
         
@@ -1010,60 +881,54 @@ class MainWindow:
         for link in links:
             self.status_tree.insert('', tk.END, values=(link, 'Đang chờ...', ''))
         
-        # Chạy download trong thread riêng
-        thread = threading.Thread(target=self._download_worker, args=(links,), daemon=True)
-        thread.start()
+        # Controllerを使用してダウンロードを開始
+        success, error = self.download_controller.start_download(
+            links=links,
+            progress_callback=self._on_progress_update,
+            result_callback=self._on_download_result,
+            complete_callback=self._on_download_complete
+        )
+        
+        if not success:
+            messagebox.showerror("Lỗi", error)
+            self.start_btn.config(state=tk.NORMAL)
+            self.stop_btn.config(state=tk.DISABLED)
     
-    def _download_worker(self, links: List[str]):
-        """Worker thread để tải video"""
-        total = len(links)
-        download_folder = self.cookie_manager.get_download_folder()
-        naming_mode = self.cookie_manager.get_setting("naming_mode", "video_id")
+    def _on_progress_update(self, progress: float, current: int, total: int):
+        """進捗更新コールバック"""
+        self.root.after(0, lambda: self._update_progress(progress, current, total))
+    
+    def _on_download_result(self, result: Dict):
+        """ダウンロード結果コールバック"""
+        # 絶対パスに変換
+        if result.get('file_path'):
+            file_path = result.get('file_path')
+            if not os.path.isabs(file_path):
+                download_folder = self.cookie_manager.get_download_folder()
+                if download_folder:
+                    file_path = os.path.join(download_folder, file_path)
+                    result['file_path'] = file_path
         
-        for idx, link in enumerate(links):
-            if self.should_stop:
+        self.results.append(result)
+        # UIを更新
+        url = result.get('url', '')
+        status = "✓ Thành công" if result.get('success') else f"✗ {result.get('error', 'Lỗi')}"
+        file_path = result.get('file_path', '')
+        file_basename = os.path.basename(file_path) if file_path else ''
+        
+        # Treeviewを更新
+        self.root.after(0, lambda: self._update_status_in_treeview(url, status, file_basename))
+    
+    def _update_status_in_treeview(self, url: str, status: str, file_basename: str):
+        """Treeviewのステータスを更新"""
+        for item in self.status_tree.get_children():
+            values = self.status_tree.item(item, 'values')
+            if len(values) >= 1 and values[0] == url:
+                self.status_tree.item(item, values=(url, status, file_basename))
                 break
-            
-            # Cập nhật progress
-            progress = (idx / total) * 100
-            self.root.after(0, lambda p=progress, i=idx, t=total: self._update_progress(p, i, t))
-            
-            # Xử lý video
-            if self.logger:
-                self.logger.info(f"Đang xử lý video {idx+1}/{total}: {link}")
-            result = self.downloader.process_video(link, download_folder, naming_mode)
-            
-            # Đảm bảo file_path là absolute path
-            if result.get('file_path'):
-                file_path = result.get('file_path')
-                if not os.path.isabs(file_path):
-                    # Chuyển đổi thành absolute path
-                    result['file_path'] = os.path.abspath(file_path)
-                    if self.logger:
-                        self.logger.debug(f"Video {idx+1}/{total} - Chuyển đổi file_path thành absolute: {result['file_path']}")
-            
-            self.results.append(result)
-            
-            # Log kết quả
-            if result['success']:
-                if self.logger:
-                    self.logger.info(f"Video {idx+1}/{total} - Thành công: {result.get('file_path', '')}")
-            else:
-                if self.logger:
-                    self.logger.error(f"Video {idx+1}/{total} - Thất bại: {result.get('error', 'Lỗi không xác định')}")
-            
-            # Cập nhật trạng thái trong treeview
-            status = "✓ Thành công" if result['success'] else f"✗ {result.get('error', 'Lỗi')}"
-            file_path = result.get('file_path', '')
-            
-            # Tìm item trong treeview và cập nhật
-            items = self.status_tree.get_children()
-            if idx < len(items):
-                item = items[idx]
-                self.root.after(0, lambda i=item, s=status, f=file_path: 
-                               self.status_tree.item(i, values=(link, s, os.path.basename(f) if f else '')))
-        
-        # Hoàn tất
+    
+    def _on_download_complete(self):
+        """ダウンロード完了コールバック"""
         self.root.after(0, self._download_complete)
     
     def _update_progress(self, progress: float, current: int, total: int):
@@ -1076,7 +941,6 @@ class MainWindow:
         if self.logger:
             self.logger.info("Download - Quá trình tải đã hoàn tất")
         
-        self.is_downloading = False
         self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
         self.progress_var.set(100)
@@ -1108,9 +972,12 @@ class MainWindow:
         """Dừng quá trình tải"""
         if self.logger:
             self.logger.info("User clicked: Dừng tải button")
-        self.should_stop = True
+        
+        # Controllerを使用して停止
+        self.download_controller.stop_download()
+        
         self.progress_label.config(text="Đang dừng...")
         if self.logger:
-            self.logger.info("Dừng tải - Đã dừng quá trình tải")
+            self.logger.info("Dừng tải - Đã gọi download_controller.stop_download()")
 
 

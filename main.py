@@ -12,8 +12,7 @@ from datetime import datetime
 # Thêm thư mục hiện tại vào path để import modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from cookie_manager import CookieManager
-from downloader import VideoDownloader
+from models.cookie_manager import CookieManager
 from ui.main_window import MainWindow
 
 
@@ -87,7 +86,7 @@ def main():
             logger.info("CookieManager đã được khởi tạo")
         
         # Khởi tạo main window
-        app = MainWindow(root, cookie_manager, VideoDownloader, logger)
+        app = MainWindow(root, cookie_manager, logger)
         if logger:
             logger.info("MainWindow đã được khởi tạo")
             logger.info("Ứng dụng sẵn sàng!")

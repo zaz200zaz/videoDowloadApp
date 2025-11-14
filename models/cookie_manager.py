@@ -186,7 +186,8 @@ class CookieManager:
                 "download_folder": "./downloads",
                 "settings": {
                     "naming_mode": "video_id",
-                    "max_concurrent": 3
+                    "max_concurrent": 3,
+                    "video_format": "auto"
                 }
             }
             self._save_config(default_config)
@@ -194,5 +195,4 @@ class CookieManager:
         except Exception as e:
             print(f"Lỗi khi reset: {e}")
             return False
-
 

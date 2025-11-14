@@ -1,6 +1,6 @@
 """
-Video Downloader Module
-Xử lý việc tải video từ Douyin
+Video Downloader Service
+ビデオダウンロードのビジネスロジック
 """
 
 import os
@@ -1219,6 +1219,10 @@ class VideoDownloader:
             # Tải file
             with open(save_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
+                    # 停止シグナルをチェック（各チャンクの処理中）
+                    if hasattr(self, '_service_ref') and self._service_ref and self._service_ref.should_stop:
+                        self.log('info', "Download stopped by user during file download")
+                        return False
                     if chunk:
                         f.write(chunk)
             
