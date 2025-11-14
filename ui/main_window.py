@@ -139,13 +139,21 @@ class MainWindow:
         self.select_folder_btn = ttk.Button(download_buttons, text="Chọn thư mục", command=self._select_folder)
         self.select_folder_btn.pack(side=tk.LEFT, padx=5)
         
+        # Hiển thị đường dẫn lưu video
+        download_folder = self.cookie_manager.get_download_folder()
+        folder_label_text = f"Thư mục lưu: {download_folder}" if download_folder else "Thư mục lưu: Chưa chọn"
+        self.folder_path_label = ttk.Label(download_frame, text=folder_label_text, foreground="blue", cursor="hand2")
+        self.folder_path_label.grid(row=1, column=0, sticky=tk.W, pady=5)
+        # Thêm sự kiện click để mở thư mục
+        self.folder_path_label.bind("<Button-1>", lambda e: self._open_download_folder())
+        
         # Progress bar
         self.progress_var = tk.DoubleVar()
         self.progress_bar = ttk.Progressbar(download_frame, variable=self.progress_var, maximum=100, length=400)
-        self.progress_bar.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=5)
+        self.progress_bar.grid(row=2, column=0, sticky=(tk.W, tk.E), pady=5)
         
         self.progress_label = ttk.Label(download_frame, text="Sẵn sàng")
-        self.progress_label.grid(row=2, column=0, sticky=tk.W, pady=2)
+        self.progress_label.grid(row=3, column=0, sticky=tk.W, pady=2)
         
         # ========== PHẦN 4: DANH SÁCH TRẠNG THÁI ==========
         status_frame = ttk.LabelFrame(main_frame, text="4. Trạng thái tải", padding="10")
@@ -174,7 +182,7 @@ class MainWindow:
         self.stats_label = ttk.Label(status_frame, text="Tổng: 0 | Thành công: 0 | Thất bại: 0")
         self.stats_label.grid(row=1, column=0, sticky=tk.W, pady=5)
         
-        # Nút reset và log
+        # Nút reset, log và xóa video
         reset_buttons = ttk.Frame(status_frame)
         reset_buttons.grid(row=2, column=0, sticky=tk.W, pady=5)
         
@@ -183,6 +191,9 @@ class MainWindow:
         
         self.open_log_btn = ttk.Button(reset_buttons, text="Mở thư mục Log", command=self._open_log_folder)
         self.open_log_btn.pack(side=tk.LEFT, padx=5)
+        
+        self.delete_videos_btn = ttk.Button(reset_buttons, text="Xóa video đã tải", command=self._delete_downloaded_videos)
+        self.delete_videos_btn.pack(side=tk.LEFT, padx=5)
     
     def _load_saved_cookie(self):
         """Tải cookie đã lưu vào ô nhập"""
@@ -190,6 +201,14 @@ class MainWindow:
         if cookie:
             self.cookie_text.insert('1.0', cookie)
             self.cookie_status_label.config(text="✓ Đã tải cookie đã lưu", foreground="green")
+        
+        # Cập nhật hiển thị đường dẫn lưu video
+        if hasattr(self, 'folder_path_label'):
+            download_folder = self.cookie_manager.get_download_folder()
+            if download_folder:
+                self.folder_path_label.config(text=f"Thư mục lưu: {download_folder}")
+            else:
+                self.folder_path_label.config(text="Thư mục lưu: Chưa chọn")
     
     def _load_cookie_from_file(self):
         """Tải cookie từ file"""
@@ -661,10 +680,44 @@ class MainWindow:
             if self.logger:
                 self.logger.info(f"Chọn thư mục - Thư mục được chọn: {folder}")
             self.cookie_manager.set_download_folder(folder)
+            # Cập nhật label hiển thị đường dẫn
+            self.folder_path_label.config(text=f"Thư mục lưu: {folder}")
             messagebox.showinfo("Thành công", f"Đã chọn thư mục: {folder}")
         else:
             if self.logger:
                 self.logger.info("Chọn thư mục - Người dùng đã hủy")
+    
+    def _open_download_folder(self):
+        """Mở thư mục download"""
+        import subprocess
+        import platform
+        
+        download_folder = self.cookie_manager.get_download_folder()
+        if not download_folder:
+            if self.logger:
+                self.logger.warning("Mở thư mục download - Chưa chọn thư mục")
+            messagebox.showwarning("Cảnh báo", "Chưa chọn thư mục lưu video!")
+            return
+        
+        if not os.path.exists(download_folder):
+            if self.logger:
+                self.logger.warning(f"Mở thư mục download - Thư mục không tồn tại: {download_folder}")
+            messagebox.showerror("Lỗi", f"Thư mục không tồn tại:\n{download_folder}")
+            return
+        
+        try:
+            if self.logger:
+                self.logger.info(f"Mở thư mục download - Đang mở: {download_folder}")
+            if platform.system() == 'Windows':
+                os.startfile(download_folder)
+            elif platform.system() == 'Darwin':  # macOS
+                subprocess.Popen(['open', download_folder])
+            else:  # Linux
+                subprocess.Popen(['xdg-open', download_folder])
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Mở thư mục download - Lỗi: {e}")
+            messagebox.showerror("Lỗi", f"Không thể mở thư mục:\n{download_folder}\n\nLỗi: {e}")
     
     def _open_log_folder(self):
         """Mở thư mục chứa log files"""
@@ -689,6 +742,136 @@ class MainWindow:
                 subprocess.Popen(['xdg-open', log_dir])
         except Exception as e:
             messagebox.showerror("Lỗi", f"Không thể mở thư mục log: {e}\n\nThư mục log: {log_dir}")
+    
+    def _delete_downloaded_videos(self):
+        """Xóa các video đã tải thành công"""
+        if self.logger:
+            self.logger.info("User clicked: Xóa video đã tải button")
+        
+        # Debug: Log tất cả results
+        if self.logger:
+            self.logger.debug(f"Xóa video - Tổng số results: {len(self.results)}")
+            for idx, r in enumerate(self.results):
+                self.logger.debug(f"Xóa video - Result {idx}: success={r.get('success')}, file_path={r.get('file_path')}")
+        
+        # Kiểm tra xem có video nào đã tải thành công không
+        successful_videos = [r for r in self.results if r.get('success') and r.get('file_path')]
+        
+        if self.logger:
+            self.logger.info(f"Xóa video - Tìm thấy {len(successful_videos)} video đã tải thành công")
+            for idx, v in enumerate(successful_videos):
+                self.logger.debug(f"Xóa video - Video {idx}: {v.get('file_path')}")
+        
+        if not successful_videos:
+            if self.logger:
+                self.logger.info("Xóa video - Không có video nào đã tải thành công")
+            messagebox.showinfo("Thông tin", "Không có video nào đã tải thành công để xóa.")
+            return
+        
+        # Xác nhận xóa
+        result = messagebox.askyesno(
+            "Xác nhận xóa",
+            f"Bạn có chắc chắn muốn xóa {len(successful_videos)} video đã tải thành công không?\n\n"
+            f"Thao tác này không thể hoàn tác!"
+        )
+        
+        if not result:
+            if self.logger:
+                self.logger.info("Xóa video - Người dùng đã hủy")
+            return
+        
+        if self.logger:
+            self.logger.info(f"Xóa video - Bắt đầu xóa {len(successful_videos)} video")
+        
+        # Xóa các file
+        deleted_count = 0
+        failed_count = 0
+        failed_files = []
+        
+        for video_result in successful_videos:
+            file_path = video_result.get('file_path')
+            if self.logger:
+                self.logger.debug(f"Xóa video - Kiểm tra file: {file_path}")
+                self.logger.debug(f"Xóa video - File exists: {os.path.exists(file_path) if file_path else False}")
+            
+            if not file_path:
+                if self.logger:
+                    self.logger.warning("Xóa video - file_path là None hoặc rỗng")
+                continue
+            
+            # Đảm bảo file_path là absolute path
+            if not os.path.isabs(file_path):
+                # Nếu là relative path, thử tìm trong download folder
+                download_folder = self.cookie_manager.get_download_folder()
+                if download_folder:
+                    file_path = os.path.join(download_folder, file_path)
+                    if self.logger:
+                        self.logger.debug(f"Xóa video - Chuyển đổi thành absolute path: {file_path}")
+            
+            if os.path.exists(file_path):
+                try:
+                    if self.logger:
+                        self.logger.info(f"Xóa video - Đang xóa file: {file_path}")
+                    os.remove(file_path)
+                    deleted_count += 1
+                    if self.logger:
+                        self.logger.info(f"Xóa video - Đã xóa thành công: {file_path}")
+                    
+                    # Cập nhật trạng thái trong treeview
+                    # Tìm item tương ứng trong treeview
+                    file_basename = os.path.basename(file_path)
+                    for item in self.status_tree.get_children():
+                        values = self.status_tree.item(item, 'values')
+                        if len(values) >= 3:
+                            # So sánh với basename hoặc full path
+                            if values[2] == file_basename or values[2] == file_path:
+                                self.status_tree.item(item, values=(values[0], 'Đã xóa', ''))
+                                if self.logger:
+                                    self.logger.debug(f"Xóa video - Đã cập nhật treeview item: {values[0]}")
+                                break
+                except Exception as e:
+                    failed_count += 1
+                    failed_files.append(file_path)
+                    if self.logger:
+                        self.logger.error(f"Xóa video - Lỗi khi xóa {file_path}: {e}", exc_info=True)
+            else:
+                if self.logger:
+                    self.logger.warning(f"Xóa video - File không tồn tại: {file_path}")
+                # File không tồn tại, nhưng vẫn đánh dấu là đã xóa (có thể đã bị xóa thủ công)
+                deleted_count += 1
+        
+        # Cập nhật results
+        for video_result in successful_videos:
+            if video_result.get('file_path') and os.path.exists(video_result.get('file_path')):
+                # File vẫn tồn tại (xóa thất bại)
+                pass
+            else:
+                # File đã được xóa
+                video_result['success'] = False
+                video_result['error'] = 'Đã xóa'
+                video_result['file_path'] = None
+        
+        # Hiển thị kết quả
+        if failed_count == 0:
+            if self.logger:
+                self.logger.info(f"Xóa video - Thành công: Đã xóa {deleted_count} video")
+            messagebox.showinfo("Thành công", f"Đã xóa {deleted_count} video thành công!")
+        else:
+            if self.logger:
+                self.logger.warning(f"Xóa video - Một số file không thể xóa: {deleted_count} thành công, {failed_count} thất bại")
+            messagebox.showwarning(
+                "Cảnh báo",
+                f"Đã xóa {deleted_count} video thành công.\n"
+                f"{failed_count} video không thể xóa:\n\n" +
+                "\n".join([os.path.basename(f) for f in failed_files[:5]]) +
+                (f"\n... và {len(failed_files) - 5} file khác" if len(failed_files) > 5 else "")
+            )
+        
+        # Cập nhật thống kê
+        total = len(self.results)
+        success = sum(1 for r in self.results if r.get('success'))
+        failed = total - success
+        self.stats_label.config(text=f"Tổng: {total} | Thành công: {success} | Thất bại: {failed}")
     
     def _get_links(self) -> List[str]:
         """Lấy danh sách link từ text box"""
@@ -849,6 +1032,16 @@ class MainWindow:
             if self.logger:
                 self.logger.info(f"Đang xử lý video {idx+1}/{total}: {link}")
             result = self.downloader.process_video(link, download_folder, naming_mode)
+            
+            # Đảm bảo file_path là absolute path
+            if result.get('file_path'):
+                file_path = result.get('file_path')
+                if not os.path.isabs(file_path):
+                    # Chuyển đổi thành absolute path
+                    result['file_path'] = os.path.abspath(file_path)
+                    if self.logger:
+                        self.logger.debug(f"Video {idx+1}/{total} - Chuyển đổi file_path thành absolute: {result['file_path']}")
+            
             self.results.append(result)
             
             # Log kết quả

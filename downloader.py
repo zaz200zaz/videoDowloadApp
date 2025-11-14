@@ -1188,14 +1188,28 @@ class VideoDownloader:
             
             video_id = video_info.get('video_id')
             video_url = video_info.get('video_url')
+            author = video_info.get('author', 'Unknown')
             
             if not video_url:
                 result['error'] = "Không tìm thấy link video"
                 return result
             
             result['video_id'] = video_id
+            result['author'] = author
             
-            # Bước 3: Tạo tên file
+            # Bước 3: Tạo thư mục theo tên người dùng
+            # Làm sạch tên người dùng (loại bỏ ký tự không hợp lệ cho tên thư mục)
+            import re
+            safe_author = re.sub(r'[<>:"/\\|?*]', '_', author.strip())
+            if not safe_author or safe_author == '':
+                safe_author = 'Unknown'
+            
+            # Tạo thư mục con theo tên người dùng
+            user_folder = os.path.join(download_folder, safe_author)
+            os.makedirs(user_folder, exist_ok=True)
+            self.log('info', f"Lưu video vào thư mục: {user_folder}")
+            
+            # Bước 4: Tạo tên file
             if naming_mode == "video_id" and video_id:
                 filename = f"{video_id}.mp4"
             else:
@@ -1203,9 +1217,9 @@ class VideoDownloader:
                 timestamp = int(time.time())
                 filename = f"video_{timestamp}.mp4"
             
-            file_path = os.path.join(download_folder, filename)
+            file_path = os.path.join(user_folder, filename)
             
-            # Bước 4: Tải video
+            # Bước 5: Tải video
             if self.download_video(video_url, file_path):
                 result['success'] = True
                 result['file_path'] = file_path
