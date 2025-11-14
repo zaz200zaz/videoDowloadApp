@@ -723,19 +723,23 @@ class MainWindow:
                 url = url.rstrip('.,;!?')
                 
                 # Kiểm tra URL có hợp lệ không
-                # Nếu là direct video URL (.mp4), cần chuyển đổi thành video page URL
-                if url.endswith('.mp4') or '.mp4?' in url:
-                    # Đây là direct video URL, cần extract video ID từ URL hoặc bỏ qua
-                    # Vì direct video URL có thể hết hạn, nên chỉ chấp nhận video page URL
-                    if self.logger:
-                        self.logger.debug(f"_get_links - Dòng {idx+1}: Bỏ qua direct video URL (có thể hết hạn): {url[:100]}...")
-                    continue
+                # Chấp nhận cả video page URL và direct video URL
+                is_douyin_page = 'douyin.com' in url.lower() or 'v.douyin.com' in url.lower() or 'iesdouyin.com' in url.lower()
+                is_direct_video = (url.endswith('.mp4') or '.mp4?' in url or 
+                                  'zjcdn.com' in url.lower() or 
+                                  'douyinstatic.com' in url.lower() or
+                                  '/video/' in url.lower())
                 
-                # Chỉ chấp nhận video page URL hoặc short URL
-                if 'douyin.com' in url.lower() or 'v.douyin.com' in url.lower() or 'iesdouyin.com' in url.lower():
+                if is_douyin_page:
+                    # Video page URL (ưu tiên)
                     links.append(url)
                     if self.logger:
-                        self.logger.debug(f"_get_links - Dòng {idx+1}: Thêm link hợp lệ: {url[:100]}...")
+                        self.logger.debug(f"_get_links - Dòng {idx+1}: Thêm video page URL: {url[:100]}...")
+                elif is_direct_video:
+                    # Direct video URL (có thể hết hạn nhưng vẫn thử)
+                    links.append(url)
+                    if self.logger:
+                        self.logger.warning(f"_get_links - Dòng {idx+1}: Thêm direct video URL (có thể hết hạn): {url[:100]}...")
                 else:
                     if self.logger:
                         self.logger.debug(f"_get_links - Dòng {idx+1}: Bỏ qua URL không hợp lệ: {url[:100]}...")

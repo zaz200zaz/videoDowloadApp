@@ -139,7 +139,7 @@ class VideoDownloader:
         Chuẩn hóa URL video Douyin
         
         Args:
-            url: URL gốc từ người dùng
+            url: URL gốc từ người dùng (có thể là video page URL hoặc direct video URL)
             
         Returns:
             URL đã được chuẩn hóa hoặc None nếu không hợp lệ
@@ -148,6 +148,17 @@ class VideoDownloader:
             return None
         
         url = url.strip()
+        
+        # Kiểm tra xem có phải direct video URL không
+        is_direct_video = (url.endswith('.mp4') or '.mp4?' in url or 
+                          'zjcdn.com' in url.lower() or 
+                          'douyinstatic.com' in url.lower() or
+                          ('/video/' in url.lower() and 'douyin.com' not in url.lower()))
+        
+        # Nếu là direct video URL, trả về trực tiếp (không cần normalize)
+        if is_direct_video:
+            self.log('info', f"Phát hiện direct video URL, bỏ qua normalize: {url[:100]}...")
+            return url
         
         # Kiểm tra xem có phải link Douyin không
         if "douyin.com" not in url and "iesdouyin.com" not in url:
@@ -244,12 +255,29 @@ class VideoDownloader:
         Lấy thông tin video từ Douyin API
         
         Args:
-            url: URL video
+            url: URL video (có thể là video page URL hoặc direct video URL)
             
         Returns:
             Dict chứa thông tin video hoặc None nếu lỗi
         """
         try:
+            # Kiểm tra xem có phải direct video URL không
+            is_direct_video = (url.endswith('.mp4') or '.mp4?' in url or 
+                              'zjcdn.com' in url.lower() or 
+                              'douyinstatic.com' in url.lower() or
+                              ('/video/' in url.lower() and 'douyin.com' not in url.lower()))
+            
+            if is_direct_video:
+                # Đây là direct video URL, trả về trực tiếp
+                self.log('info', f"Phát hiện direct video URL: {url[:100]}...")
+                self.log('warning', "Direct video URL có thể hết hạn, nhưng vẫn thử tải")
+                return {
+                    'video_id': None,
+                    'title': 'Direct Video',
+                    'author': 'Unknown',
+                    'video_url': url
+                }
+            
             video_id = self.extract_video_id(url)
             if not video_id:
                 self.log('error', f"Không thể trích xuất video ID từ URL: {url}")
@@ -1168,9 +1196,10 @@ class VideoDownloader:
             result['video_id'] = video_id
             
             # Bước 3: Tạo tên file
-            if naming_mode == "video_id":
+            if naming_mode == "video_id" and video_id:
                 filename = f"{video_id}.mp4"
             else:
+                # Nếu không có video_id hoặc naming_mode là timestamp, dùng timestamp
                 timestamp = int(time.time())
                 filename = f"video_{timestamp}.mp4"
             
