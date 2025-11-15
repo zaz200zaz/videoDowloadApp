@@ -77,7 +77,11 @@ class VideoDownloader:
             # Ngăn chặn propagate đến root logger để đảm bảo format nhất quán (theo System Instruction 4.2)
             self.logger.propagate = False
             
-            # Xóa các handler cũ
+            # Xóa các handler cũ và đóng file handlers để tránh ResourceWarning (theo System Instruction 8)
+            for handler in self.logger.handlers[:]:
+                if hasattr(handler, 'close'):
+                    handler.close()
+                self.logger.removeHandler(handler)
             self.logger.handlers = []
             
             # File handler
@@ -110,18 +114,23 @@ class VideoDownloader:
         except Exception as e:
             # Nếu không thể tạo log file, vẫn tiếp tục nhưng không có logging
             # Log lỗi này (nếu có logger cơ bản)
+            # Import logging ở đây để tránh lỗi "cannot access local variable 'logging'"
+            # (theo System Instruction 5 - xử lý lỗi với logging đầy đủ)
             try:
-                import logging
-                temp_logger = logging.getLogger('VideoDownloader')
+                # logging module đã được import ở đầu file, nhưng nếu có exception
+                # thì có thể cần import lại trong exception handler
+                import logging as logging_module
+                temp_logger = logging_module.getLogger('VideoDownloader')
                 temp_logger.warning(f"[VideoDownloader._setup_logging] Không thể tạo log file: {e}")
             except:
                 pass
             # Tạo logger mặc định (chỉ console)
-            self.logger = logging.getLogger('VideoDownloader')
-            self.logger.setLevel(logging.INFO)
+            import logging as logging_module  # Import với alias để tránh conflict
+            self.logger = logging_module.getLogger('VideoDownloader')
+            self.logger.setLevel(logging_module.INFO)
             self.logger.handlers = []
-            console_handler = logging.StreamHandler()
-            console_handler.setLevel(logging.INFO)
+            console_handler = logging_module.StreamHandler()
+            console_handler.setLevel(logging_module.INFO)
             self.logger.addHandler(console_handler)
             self.log_file_path = None
     
@@ -294,6 +303,12 @@ class VideoDownloader:
         self.log('info', f"Bắt đầu extract video ID từ URL: {url[:100] if url else 'None'}...", function_name)
         
         try:
+            # Kiểm tra URL hợp lệ trước khi search (theo System Instruction 5 - xử lý lỗi đầy đủ)
+            if not url or not isinstance(url, str):
+                self.log('warning', f"URL không hợp lệ (None hoặc không phải string): {url}", function_name)
+                self.log('info', "Extract video ID hoàn thành - URL không hợp lệ", function_name)
+                return None
+            
             # Sử dụng compiled regex patterns (tối ưu hiệu suất - System Instruction 6)
             # Compile regex một lần và tái sử dụng thay vì compile lại mỗi lần
             for pattern in self._regex_patterns['video_id_patterns']:
@@ -1713,7 +1728,8 @@ class VideoDownloader:
                             'timeout_detected': False,
                             'skipped': True,
                             'download_time': elapsed_time,
-                            'file_size': downloaded_size
+                            'file_size': downloaded_size,
+                            'file_path': None  # File đã bị xóa
                         }
                     
                     if chunk:
@@ -1754,7 +1770,8 @@ class VideoDownloader:
                                         'timeout_detected': True,
                                         'skipped': False,
                                         'download_time': elapsed_time,
-                                        'file_size': downloaded_size
+                                        'file_size': downloaded_size,
+                                        'file_path': None  # File có thể đã bị xóa
                                     }
                         
                         # Log tiến trình mỗi 1000 chunks hoặc mỗi 25% (giảm log spam - System Instruction 6.2)
@@ -1800,7 +1817,8 @@ class VideoDownloader:
                     'timeout_detected': False,
                     'skipped': False,
                     'download_time': download_time,
-                    'file_size': actual_size
+                    'file_size': actual_size,
+                    'file_path': save_path  # Thêm file_path vào result (theo System Instruction 4.3 - DEBUG cho output)
                 }
             else:
                 self.log('error', "File không tồn tại sau khi tải")
@@ -1812,7 +1830,8 @@ class VideoDownloader:
                     'timeout_detected': False,
                     'skipped': False,
                     'download_time': download_time,
-                    'file_size': 0
+                    'file_size': 0,
+                    'file_path': None  # File không tồn tại
                 }
             
         except requests.exceptions.Timeout as e:
@@ -1833,7 +1852,8 @@ class VideoDownloader:
                 'timeout_detected': True,
                 'skipped': False,
                 'download_time': time.time() - start_time,
-                'file_size': 0
+                'file_size': 0,
+                'file_path': None  # File chưa được tạo hoặc đã bị xóa
             }
             
         except requests.exceptions.RequestException as e:
@@ -1854,7 +1874,8 @@ class VideoDownloader:
                 'timeout_detected': False,
                 'skipped': False,
                 'download_time': time.time() - start_time,
-                'file_size': 0
+                'file_size': 0,
+                'file_path': None  # File chưa được tạo hoặc đã bị xóa
             }
             
         except Exception as e:
@@ -1875,7 +1896,8 @@ class VideoDownloader:
                 'timeout_detected': False,
                 'skipped': False,
                 'download_time': time.time() - start_time,
-                'file_size': 0
+                'file_size': 0,
+                'file_path': None  # File chưa được tạo hoặc đã bị xóa
             }
     
     def _cleanup_partial_file(self, save_path: str):
