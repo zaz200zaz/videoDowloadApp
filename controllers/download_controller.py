@@ -139,12 +139,33 @@ class DownloadController:
         video_format = self.cookie_manager.get_setting("video_format", "auto")
         orientation_filter = self.cookie_manager.get_setting("orientation_filter", "all")
         
+        # Lấy timeout settings từ CookieManager (mới)
+        timeout_settings = {
+            'download_timeout_seconds': self.cookie_manager.get_setting("download_timeout_seconds", 300),
+            'chunk_timeout_seconds': self.cookie_manager.get_setting("chunk_timeout_seconds", 30),
+            'max_retries': self.cookie_manager.get_setting("max_retries", 3),
+            'retry_delay_seconds': self.cookie_manager.get_setting("retry_delay_seconds", 5),
+            'max_download_time_seconds': self.cookie_manager.get_setting("max_download_time_seconds", 1800),
+            'enable_timeout_detection': self.cookie_manager.get_setting("enable_timeout_detection", True),
+            'enable_auto_retry': self.cookie_manager.get_setting("enable_auto_retry", True),
+            'enable_skip_slow_videos': self.cookie_manager.get_setting("enable_skip_slow_videos", True),
+            'chunk_size': self.cookie_manager.get_setting("chunk_size", 8192)
+        }
+        
         if self.logger:
             self.logger.info("Đã lấy cấu hình:")
             self.logger.info(f"  - Download folder: {download_folder}")
             self.logger.info(f"  - Naming mode: {naming_mode}")
             self.logger.info(f"  - Video format: {video_format}")
             self.logger.info(f"  - Orientation filter: {orientation_filter}")
+            # Log timeout settings (mới)
+            self.logger.info("Timeout settings:")
+            self.logger.info(f"  - Timeout detection: {timeout_settings['enable_timeout_detection']}")
+            self.logger.info(f"  - Auto retry: {timeout_settings['enable_auto_retry']}")
+            self.logger.info(f"  - Skip slow videos: {timeout_settings['enable_skip_slow_videos']}")
+            self.logger.info(f"  - Max retries: {timeout_settings['max_retries']}")
+            self.logger.info(f"  - Chunk timeout: {timeout_settings['chunk_timeout_seconds']}s")
+            self.logger.info(f"  - Max download time: {timeout_settings['max_download_time_seconds']}s ({timeout_settings['max_download_time_seconds']/60:.1f} phút)")
             self.logger.info("Đang gọi DownloadService.start_download...")
         
         try:
@@ -157,7 +178,8 @@ class DownloadController:
                 orientation_filter=orientation_filter,
                 progress_callback=progress_callback,
                 result_callback=result_callback,
-                complete_callback=complete_callback
+                complete_callback=complete_callback,
+                timeout_settings=timeout_settings  # Thêm timeout_settings
             )
             
             if self.logger:

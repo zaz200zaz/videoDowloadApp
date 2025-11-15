@@ -1427,27 +1427,100 @@ class VideoDownloader:
         # Nếu chỉ có một URL (video_url), trả về trực tiếp
         return video_info.get('video_url')
     
-    def download_video(self, video_url: str, save_path: str) -> bool:
+    def download_video(self, video_url: str, save_path: str, timeout_settings: dict = None) -> dict:
         """
-        Tải video từ URL về máy
+        Tải video từ URL về máy với timeout detection và retry logic
         
         Args:
             video_url: URL video thực tế
             save_path: Đường dẫn lưu file
+            timeout_settings: Dict chứa các cài đặt timeout và retry (None thì dùng giá trị mặc định)
+                - download_timeout_seconds: Timeout tổng (mặc định: 300s = 5 phút)
+                - chunk_timeout_seconds: Timeout cho mỗi chunk (mặc định: 30s)
+                - max_retries: Số lần retry tối đa (mặc định: 3)
+                - retry_delay_seconds: Thời gian chờ giữa các retry (mặc định: 5s)
+                - max_download_time_seconds: Thời gian tối đa (mặc định: 1800s = 30 phút)
+                - enable_timeout_detection: Bật/tắt timeout detection (mặc định: True)
+                - enable_auto_retry: Bật/tắt auto retry (mặc định: True)
+                - enable_skip_slow_videos: Bật/tắt skip video quá lâu (mặc định: True)
+                - chunk_size: Kích thước chunk (mặc định: 8192 bytes)
             
         Returns:
-            True nếu tải thành công, False nếu lỗi
+            Dict chứa kết quả:
+                - success: True nếu thành công, False nếu thất bại
+                - error: Thông điệp lỗi (nếu có)
+                - retry_count: Số lần đã retry
+                - timeout_detected: True nếu phát hiện timeout
+                - skipped: True nếu bị skip do quá lâu
+                - download_time: Thời gian tải (giây)
+                - file_size: Kích thước file (bytes)
         """
+        function_name = "VideoDownloader.download_video"
+        
+        # Sử dụng cài đặt mặc định nếu không được cung cấp
+        if timeout_settings is None:
+            timeout_settings = {
+                'download_timeout_seconds': 300,  # 5 phút
+                'chunk_timeout_seconds': 30,  # 30 giây
+                'max_retries': 3,
+                'retry_delay_seconds': 5,
+                'max_download_time_seconds': 1800,  # 30 phút
+                'enable_timeout_detection': True,
+                'enable_auto_retry': True,
+                'enable_skip_slow_videos': True,
+                'chunk_size': 8192
+            }
+        
+        # Log cài đặt timeout
         self.log('info', "=" * 60)
-        self.log('info', "VideoDownloader.download_video - Bắt đầu")
+        self.log('info', f"{function_name} - Bắt đầu")
         self.log('info', f"  - Video URL: {video_url[:100]}...")
-        # Đảm bảo save_path là絶対パスで表示
         save_path_abs = os.path.abspath(save_path)
         self.log('info', f"  - Save path: {save_path_abs}")
+        self.log('debug', f"  - Timeout settings: {timeout_settings}")
+        
+        # Gọi download_video_with_retry để xử lý retry logic
+        return self.download_video_with_retry(
+            video_url, save_path, timeout_settings, retry_count=0
+        )
+    
+    def download_video_with_retry(
+        self, 
+        video_url: str, 
+        save_path: str, 
+        timeout_settings: dict, 
+        retry_count: int = 0
+    ) -> dict:
+        """
+        Tải video với retry logic và timeout detection (internal method)
+        
+        Args:
+            video_url: URL video
+            save_path: Đường dẫn lưu file
+            timeout_settings: Dict cài đặt timeout
+            retry_count: Số lần đã retry (dùng cho recursive call)
+            
+        Returns:
+            Dict kết quả (giống như download_video)
+        """
+        function_name = "VideoDownloader.download_video_with_retry"
+        
+        # Kiểm tra số lần retry
+        max_retries = timeout_settings.get('max_retries', 3)
+        enable_auto_retry = timeout_settings.get('enable_auto_retry', True)
+        
+        if retry_count > 0:
+            retry_delay = timeout_settings.get('retry_delay_seconds', 5)
+            self.log('info', f"Retry lần {retry_count}/{max_retries} sau {retry_delay} giây...")
+            import time
+            time.sleep(retry_delay)
         
         # Ghi lại thời gian bắt đầu
         import time
         start_time = time.time()
+        
+        # Đảm bảo save_path là絶対パス
+        save_path_abs = os.path.abspath(save_path)
         
         try:
             # Kiểm tra thư mục
@@ -1456,8 +1529,16 @@ class VideoDownloader:
                 self.log('info', f"Thư mục không tồn tại, đang tạo: {save_dir}")
                 os.makedirs(save_dir, exist_ok=True)
             
+            # Kiểm tra timeout tổng trước khi bắt đầu
+            max_download_time = timeout_settings.get('max_download_time_seconds', 1800)
+            enable_skip_slow = timeout_settings.get('enable_skip_slow_videos', True)
+            
+            if enable_skip_slow and max_download_time > 0:
+                self.log('debug', f"Max download time: {max_download_time} giây ({max_download_time/60:.1f} phút)")
+            
             self.log('info', "Đang gửi request để tải video...")
-            response = self.session.get(video_url, stream=True, timeout=30)
+            download_timeout = timeout_settings.get('download_timeout_seconds', 300)
+            response = self.session.get(video_url, stream=True, timeout=download_timeout)
             response.raise_for_status()
             
             # Lấy thông tin về file size nếu có
@@ -1473,54 +1554,101 @@ class VideoDownloader:
             downloaded_size = 0
             chunk_count = 0
             
-            # Tải file
+            # Cài đặt timeout detection
+            enable_timeout_detection = timeout_settings.get('enable_timeout_detection', True)
+            chunk_timeout = timeout_settings.get('chunk_timeout_seconds', 30)
+            chunk_size = timeout_settings.get('chunk_size', 8192)
+            
+            # Biến để theo dõi progress và timeout
+            last_progress_time = time.time()
+            last_downloaded_size = 0
+            
+            # Tải file với timeout detection
             with open(save_path, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    # 停止シグナルをチェック（各チャンクの処理中）
+                for chunk in response.iter_content(chunk_size=chunk_size):
+                    # Kiểm tra stop signal (trong mỗi chunk)
                     if hasattr(self, '_service_ref') and self._service_ref and self._service_ref.should_stop:
                         self.log('warning', "Download stopped by user during file download")
-                        # ファイルハンドルを閉じる（with文なので自動的に閉じられるが、明示的にflush）
                         try:
                             f.flush()
                         except Exception as e:
                             self.log('warning', f"Lỗi khi flush file: {e}")
-                        # Xóa file đã tải một phần（リトライ付き）
+                        # Xóa file đã tải một phần (với retry logic)
+                        self._cleanup_partial_file(save_path)
+                        return {
+                            'success': False,
+                            'error': 'Stopped by user',
+                            'retry_count': retry_count,
+                            'timeout_detected': False,
+                            'skipped': False,
+                            'download_time': time.time() - start_time,
+                            'file_size': downloaded_size
+                        }
+                    
+                    # Kiểm tra timeout tổng (max download time)
+                    current_time = time.time()
+                    elapsed_time = current_time - start_time
+                    if enable_skip_slow and max_download_time > 0 and elapsed_time > max_download_time:
+                        self.log('warning', f"Video quá lâu ({elapsed_time:.1f}s > {max_download_time}s), bỏ qua...")
                         try:
-                            # with文から抜ける前にファイルを閉じる必要がある
-                            # ファイルはwith文の終了時に自動的に閉じられる
-                            import time
-                            time.sleep(0.2)  # ファイルハンドルが閉じられるまで少し待つ
-                            
-                            if os.path.exists(save_path):
-                                # リトライロジック
-                                max_retries = 3
-                                for retry in range(max_retries):
-                                    try:
-                                        os.remove(save_path)
-                                        self.log('info', f"Đã xóa file đã tải một phần (thử lần {retry+1})")
-                                        break
-                                    except PermissionError as pe:
-                                        if retry < max_retries - 1:
-                                            self.log('debug', f"File đang được sử dụng, đợi 0.5 giây rồi thử lại... (thử lần {retry+1}/{max_retries})")
-                                            time.sleep(0.5)
-                                        else:
-                                            self.log('warning', f"Không thể xóa file đã tải một phần sau {max_retries} lần thử: {pe}")
-                                            self.log('warning', f"File sẽ được giữ lại: {save_path_abs}")
-                                    except Exception as e:
-                                        self.log('error', f"Lỗi khi xóa file đã tải một phần: {e}", exc_info=True)
-                                        break
+                            f.flush()
                         except Exception as e:
-                            self.log('error', f"Lỗi khi xóa file đã tải một phần: {e}", exc_info=True)
-                        return False
+                            self.log('warning', f"Lỗi khi flush file: {e}")
+                        self._cleanup_partial_file(save_path)
+                        return {
+                            'success': False,
+                            'error': f'Video quá lâu (>{max_download_time}s)',
+                            'retry_count': retry_count,
+                            'timeout_detected': False,
+                            'skipped': True,
+                            'download_time': elapsed_time,
+                            'file_size': downloaded_size
+                        }
+                    
                     if chunk:
                         f.write(chunk)
                         downloaded_size += len(chunk)
                         chunk_count += 1
                         
+                        # Timeout detection: Kiểm tra xem có progress trong chunk_timeout giây không
+                        if enable_timeout_detection and chunk_timeout > 0:
+                            current_chunk_time = time.time()
+                            time_since_last_progress = current_chunk_time - last_progress_time
+                            
+                            # Nếu có progress (downloaded_size tăng), reset timer
+                            if downloaded_size > last_downloaded_size:
+                                last_progress_time = current_chunk_time
+                                last_downloaded_size = downloaded_size
+                            # Nếu không có progress trong chunk_timeout giây, phát hiện timeout
+                            elif time_since_last_progress > chunk_timeout:
+                                self.log('warning', f"Phát hiện timeout: Không có progress trong {time_since_last_progress:.1f}s (timeout: {chunk_timeout}s)")
+                                self.log('warning', f"Downloaded size: {downloaded_size} bytes, không thay đổi trong {time_since_last_progress:.1f}s")
+                                try:
+                                    f.flush()
+                                except Exception as e:
+                                    self.log('warning', f"Lỗi khi flush file: {e}")
+                                self._cleanup_partial_file(save_path)
+                                
+                                # Retry nếu được bật và chưa vượt quá max_retries
+                                if enable_auto_retry and retry_count < max_retries:
+                                    self.log('info', f"Sẽ retry download sau {timeout_settings.get('retry_delay_seconds', 5)} giây...")
+                                    return self.download_video_with_retry(
+                                        video_url, save_path, timeout_settings, retry_count + 1
+                                    )
+                                else:
+                                    return {
+                                        'success': False,
+                                        'error': f'Timeout: Không có progress trong {time_since_last_progress:.1f}s',
+                                        'retry_count': retry_count,
+                                        'timeout_detected': True,
+                                        'skipped': False,
+                                        'download_time': elapsed_time,
+                                        'file_size': downloaded_size
+                                    }
+                        
                         # Log tiến trình mỗi 500 chunks hoặc mỗi 25% (giảm log spam)
                         if content_length:
                             progress = (downloaded_size / file_size) * 100
-                            # Log mỗi 25% (0, 25, 50, 75, 100) hoặc mỗi 500 chunks
                             progress_int = int(progress)
                             if chunk_count % 500 == 0 or (progress_int % 25 == 0 and chunk_count % 100 == 0):
                                 self.log('debug', f"Đã tải: {downloaded_size} / {file_size} bytes ({progress:.1f}%)")
@@ -1543,31 +1671,132 @@ class VideoDownloader:
                     self.log('info', f"Đã tải thành công - File size: {actual_size} bytes ({actual_size / 1024 / 1024:.2f} MB)")
                     self.log('info', f"Thời gian tải: {download_time:.2f} giây ({download_time/60:.2f} phút)")
                     self.log('info', f"Tốc độ tải: {download_speed_mbps:.2f} MB/s ({download_speed_kbps:.2f} KB/s)")
+                    self.log('debug', f"Retry count: {retry_count}")
                 else:
                     self.log('info', f"Đã tải thành công - File size: {actual_size} bytes ({actual_size / 1024 / 1024:.2f} MB)")
                     self.log('info', f"Thời gian tải: < 0.01 giây")
                 
                 if content_length and actual_size != file_size:
                     self.log('warning', f"File size không khớp: expected {file_size}, actual {actual_size}")
+                
                 self.log('info', "=" * 60)
-                return True
+                return {
+                    'success': True,
+                    'error': None,
+                    'retry_count': retry_count,
+                    'timeout_detected': False,
+                    'skipped': False,
+                    'download_time': download_time,
+                    'file_size': actual_size
+                }
             else:
                 self.log('error', "File không tồn tại sau khi tải")
                 self.log('error', "=" * 60)
-                return False
+                return {
+                    'success': False,
+                    'error': 'File không tồn tại sau khi tải',
+                    'retry_count': retry_count,
+                    'timeout_detected': False,
+                    'skipped': False,
+                    'download_time': download_time,
+                    'file_size': 0
+                }
             
         except requests.exceptions.Timeout as e:
             self.log('error', f"Timeout khi tải video: {e}", exc_info=True)
+            
+            # Retry nếu được bật
+            if enable_auto_retry and retry_count < max_retries:
+                self.log('info', f"Sẽ retry download sau {timeout_settings.get('retry_delay_seconds', 5)} giây...")
+                return self.download_video_with_retry(
+                    video_url, save_path, timeout_settings, retry_count + 1
+                )
+            
             self.log('error', "=" * 60)
-            return False
+            return {
+                'success': False,
+                'error': f'Timeout: {str(e)}',
+                'retry_count': retry_count,
+                'timeout_detected': True,
+                'skipped': False,
+                'download_time': time.time() - start_time,
+                'file_size': 0
+            }
+            
         except requests.exceptions.RequestException as e:
             self.log('error', f"Request error khi tải video: {e}", exc_info=True)
+            
+            # Retry nếu được bật
+            if enable_auto_retry and retry_count < max_retries:
+                self.log('info', f"Sẽ retry download sau {timeout_settings.get('retry_delay_seconds', 5)} giây...")
+                return self.download_video_with_retry(
+                    video_url, save_path, timeout_settings, retry_count + 1
+                )
+            
             self.log('error', "=" * 60)
-            return False
+            return {
+                'success': False,
+                'error': f'Request error: {str(e)}',
+                'retry_count': retry_count,
+                'timeout_detected': False,
+                'skipped': False,
+                'download_time': time.time() - start_time,
+                'file_size': 0
+            }
+            
         except Exception as e:
             self.log('error', f"Lỗi không xác định khi tải: {e}", exc_info=True)
+            
+            # Retry nếu được bật (chỉ cho một số lỗi cụ thể)
+            if enable_auto_retry and retry_count < max_retries and isinstance(e, (IOError, OSError)):
+                self.log('info', f"Sẽ retry download sau {timeout_settings.get('retry_delay_seconds', 5)} giây...")
+                return self.download_video_with_retry(
+                    video_url, save_path, timeout_settings, retry_count + 1
+                )
+            
             self.log('error', "=" * 60)
-            return False
+            return {
+                'success': False,
+                'error': f'Lỗi không xác định: {str(e)}',
+                'retry_count': retry_count,
+                'timeout_detected': False,
+                'skipped': False,
+                'download_time': time.time() - start_time,
+                'file_size': 0
+            }
+    
+    def _cleanup_partial_file(self, save_path: str):
+        """
+        Xóa file đã tải một phần (với retry logic để tránh PermissionError trên Windows)
+        
+        Args:
+            save_path: Đường dẫn file cần xóa
+        """
+        function_name = "VideoDownloader._cleanup_partial_file"
+        
+        try:
+            import time
+            time.sleep(0.2)  # Đợi file handle đóng
+            
+            if os.path.exists(save_path):
+                max_retries = 3
+                for retry in range(max_retries):
+                    try:
+                        os.remove(save_path)
+                        self.log('info', f"Đã xóa file đã tải một phần (thử lần {retry+1})")
+                        return
+                    except PermissionError as pe:
+                        if retry < max_retries - 1:
+                            self.log('debug', f"File đang được sử dụng, đợi 0.5 giây rồi thử lại... (thử lần {retry+1}/{max_retries})")
+                            time.sleep(0.5)
+                        else:
+                            self.log('warning', f"Không thể xóa file đã tải một phần sau {max_retries} lần thử: {pe}")
+                            self.log('warning', f"File sẽ được giữ lại: {os.path.abspath(save_path)}")
+                    except Exception as e:
+                        self.log('error', f"Lỗi khi xóa file đã tải một phần: {e}", exc_info=True)
+                        break
+        except Exception as e:
+            self.log('error', f"Lỗi khi cleanup file: {e}", exc_info=True)
     
     def _get_video_orientation_from_file(self, file_path: str) -> str:
         """
@@ -1610,7 +1839,7 @@ class VideoDownloader:
             self.log('error', f"Lỗi khi lấy metadata từ file {file_path}: {e}", exc_info=True)
             return 'unknown'
     
-    def process_video(self, url: str, download_folder: str, naming_mode: str = "video_id", video_format: str = "auto", orientation_filter: str = "all") -> Dict:
+    def process_video(self, url: str, download_folder: str, naming_mode: str = "video_id", video_format: str = "auto", orientation_filter: str = "all", timeout_settings: dict = None) -> Dict:
         """
         Xử lý một video từ URL đến file đã tải
         
@@ -1644,7 +1873,13 @@ class VideoDownloader:
             'video_id': None,
             'file_path': None,
             'error': None,
-            'url': url
+            'url': url,
+            # Thống kê timeout và retry (mới)
+            'retry_count': 0,
+            'timeout_detected': False,
+            'skipped': False,
+            'download_time': 0,
+            'file_size': 0
         }
         
         try:
@@ -1759,10 +1994,55 @@ class VideoDownloader:
                     counter += 1
                 self.log('info', f"File đã tồn tại, đổi tên thành: {os.path.basename(file_path)}")
             
-            # Bước 5: Tải video
-            success = self.download_video(video_url, file_path)
+            # Bước 5: Tải video với timeout settings
+            # Sử dụng timeout_settings từ parameter, hoặc lấy từ config nếu không có
+            if timeout_settings is None:
+                # Nếu không có timeout_settings, sử dụng giá trị mặc định
+                # (trong tương lai có thể lấy từ CookieManager nếu cần)
+                timeout_settings = {
+                    'download_timeout_seconds': 300,  # 5 phút
+                    'chunk_timeout_seconds': 30,  # 30 giây
+                    'max_retries': 3,
+                    'retry_delay_seconds': 5,
+                    'max_download_time_seconds': 1800,  # 30 phút
+                    'enable_timeout_detection': True,
+                    'enable_auto_retry': True,
+                    'enable_skip_slow_videos': True,
+                    'chunk_size': 8192
+                }
+                self.log('debug', f"Sử dụng timeout settings mặc định: {timeout_settings}")
             
-            if success:
+            self.log('info', f"Bắt đầu tải video với timeout settings: enable_timeout_detection={timeout_settings.get('enable_timeout_detection')}, enable_auto_retry={timeout_settings.get('enable_auto_retry')}, enable_skip_slow_videos={timeout_settings.get('enable_skip_slow_videos')}")
+            
+            # Tải video với retry logic và timeout detection
+            download_result = self.download_video(video_url, file_path, timeout_settings)
+            
+            # Cập nhật result với thông tin từ download_result
+            result['success'] = download_result.get('success', False)
+            result['retry_count'] = download_result.get('retry_count', 0)
+            result['timeout_detected'] = download_result.get('timeout_detected', False)
+            result['skipped'] = download_result.get('skipped', False)
+            result['download_time'] = download_result.get('download_time', 0)
+            result['file_size'] = download_result.get('file_size', 0)
+            
+            if not download_result.get('success', False):
+                error_msg = download_result.get('error', 'Unknown error')
+                result['error'] = error_msg
+                
+                # Log chi tiết về lỗi
+                if download_result.get('timeout_detected'):
+                    self.log('warning', f"Video bị timeout sau {download_result.get('retry_count', 0)} lần retry")
+                elif download_result.get('skipped'):
+                    self.log('warning', f"Video bị skip do quá lâu (> {timeout_settings.get('max_download_time_seconds', 1800)}s)")
+                else:
+                    self.log('error', f"Video tải thất bại: {error_msg}")
+                
+                # Nếu bị skip hoặc timeout, không cần kiểm tra orientation filter
+                if download_result.get('skipped') or download_result.get('timeout_detected'):
+                    return result
+            
+            # Bước 6: Kiểm tra orientation filter (nếu cần) - CHUYỂN SAU KHI TẢI XONG
+            if download_result.get('success', False):
                 # 直接ビデオURLの場合、ダウンロード後にメタデータから向きを判定する
                 if needs_orientation_check_after_download:
                     actual_orientation = self._get_video_orientation_from_file(file_path)
@@ -1784,10 +2064,8 @@ class VideoDownloader:
                     else:
                         self.log('warning', f"Không thể xác định orientation từ file {file_path}, giữ lại file")
                 
-                result['success'] = True
+                # result['success'] đã được cập nhật từ download_result
                 result['file_path'] = file_path
-            else:
-                result['error'] = "Lỗi khi tải file"
             
         except Exception as e:
             self.log('error', f"Exception trong process_video: {e}", exc_info=True)
@@ -1803,9 +2081,23 @@ class VideoDownloader:
                 file_path_log = os.path.abspath(file_path_log)
             self.log('info', f"  - File path: {file_path_log}")
             self.log('info', f"  - Author: {result.get('author', 'N/A')}")
+            # Log thống kê timeout và retry (nếu có)
+            if result.get('retry_count', 0) > 0:
+                self.log('info', f"  - Retry count: {result.get('retry_count', 0)}")
+            if result.get('download_time', 0) > 0:
+                self.log('info', f"  - Download time: {result.get('download_time', 0):.2f}s ({result.get('download_time', 0)/60:.2f} phút)")
+            if result.get('file_size', 0) > 0:
+                self.log('info', f"  - File size: {result.get('file_size', 0)} bytes ({result.get('file_size', 0)/1024/1024:.2f} MB)")
         else:
             self.log('warning', f"process_video - Thất bại")
             self.log('warning', f"  - Error: {result.get('error', 'Unknown error')}")
+            # Log thống kê timeout và retry (nếu có)
+            if result.get('retry_count', 0) > 0:
+                self.log('warning', f"  - Retry count: {result.get('retry_count', 0)}")
+            if result.get('timeout_detected'):
+                self.log('warning', f"  - Timeout detected: True")
+            if result.get('skipped'):
+                self.log('warning', f"  - Skipped: True (video quá lâu)")
         
         self.log('info', "=" * 60)
         return result

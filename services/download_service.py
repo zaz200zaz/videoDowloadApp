@@ -37,7 +37,8 @@ class DownloadService:
         orientation_filter: str = "all",
         progress_callback: Optional[Callable[[float, int, int], None]] = None,
         result_callback: Optional[Callable[[Dict], None]] = None,
-        complete_callback: Optional[Callable[[], None]] = None
+        complete_callback: Optional[Callable[[], None]] = None,
+        timeout_settings: Optional[dict] = None
     ):
         """
         ダウンロードを開始
@@ -96,7 +97,7 @@ class DownloadService:
             self.download_thread = threading.Thread(
                 target=self._download_worker,
                 args=(links, download_folder, naming_mode, video_format, orientation_filter,
-                      progress_callback, result_callback, complete_callback),
+                      progress_callback, result_callback, complete_callback, timeout_settings),
                 daemon=True
             )
             self.download_thread.start()
@@ -120,7 +121,8 @@ class DownloadService:
         orientation_filter: str,
         progress_callback: Optional[Callable[[float, int, int], None]],
         result_callback: Optional[Callable[[Dict], None]],
-        complete_callback: Optional[Callable[[], None]]
+        complete_callback: Optional[Callable[[], None]],
+        timeout_settings: Optional[dict] = None
     ):
         """ダウンロードワーカースレッド"""
         import time
@@ -129,6 +131,11 @@ class DownloadService:
         failed_count = 0
         total_download_size = 0
         start_time = time.time()
+        
+        # Thống kê timeout và retry (mới)
+        timeout_count = 0
+        retry_total_count = 0
+        skipped_count = 0
         
         # Đảm bảo download_folder là絶対パス
         import os
@@ -172,9 +179,17 @@ class DownloadService:
                     break
                 
                 try:
+                    # Gọi process_video với timeout_settings
                     result = self.downloader.process_video(
-                        link, download_folder, naming_mode, video_format, orientation_filter
+                        link, download_folder, naming_mode, video_format, orientation_filter, timeout_settings
                     )
+                    
+                    # Thu thập thống kê từ result
+                    retry_total_count += result.get('retry_count', 0)
+                    if result.get('timeout_detected'):
+                        timeout_count += 1
+                    if result.get('skipped'):
+                        skipped_count += 1
                     
                     # 結果をログに記録
                     if self.logger:
@@ -182,17 +197,34 @@ class DownloadService:
                             success_count += 1
                             file_path = result.get('file_path', '')
                             if file_path and os.path.exists(file_path):
-                                file_size = os.path.getsize(file_path)
+                                # Sử dụng file_size từ result nếu có, nếu không thì lấy từ file system
+                                file_size = result.get('file_size', 0)
+                                if file_size == 0:
+                                    file_size = os.path.getsize(file_path)
                                 total_download_size += file_size
                             self.logger.info(f"  ✓ Video {idx+1} downloaded successfully")
                             self.logger.info(f"    - File path: {result.get('file_path', 'N/A')}")
                             self.logger.info(f"    - Video ID: {result.get('video_id', 'N/A')}")
                             self.logger.info(f"    - Author: {result.get('author', 'N/A')}")
+                            # Log thống kê timeout và retry
+                            if result.get('retry_count', 0) > 0:
+                                self.logger.info(f"    - Retry count: {result.get('retry_count', 0)}")
+                            if result.get('timeout_detected'):
+                                self.logger.warning(f"    - Timeout detected: True (đã retry {result.get('retry_count', 0)} lần)")
+                            if result.get('download_time', 0) > 0:
+                                self.logger.debug(f"    - Download time: {result.get('download_time', 0):.2f}s")
                         else:
                             failed_count += 1
                             self.logger.warning(f"  ✗ Video {idx+1} failed")
                             self.logger.warning(f"    - Error: {result.get('error', 'Unknown error')}")
                             self.logger.warning(f"    - URL: {link}")
+                            # Log thống kê timeout và retry cho video thất bại
+                            if result.get('retry_count', 0) > 0:
+                                self.logger.warning(f"    - Retry count: {result.get('retry_count', 0)}")
+                            if result.get('timeout_detected'):
+                                self.logger.warning(f"    - Timeout detected: True (sau {result.get('retry_count', 0)} lần retry)")
+                            if result.get('skipped'):
+                                self.logger.warning(f"    - Skipped: True (video quá lâu)")
                     
                     # 処理後に再度停止シグナルをチェック
                     if self.should_stop:
@@ -245,6 +277,10 @@ class DownloadService:
                 self.logger.info(f"  - Thành công: {success_count}")
                 self.logger.info(f"  - Thất bại: {failed_count}")
                 self.logger.info(f"  - Tỷ lệ thành công: {(success_count/total*100):.1f}%" if total > 0 else "  - Tỷ lệ thành công: N/A")
+                # Thống kê timeout và retry (mới)
+                self.logger.info(f"  - Video bị timeout: {timeout_count}")
+                self.logger.info(f"  - Video bị skip (quá lâu): {skipped_count}")
+                self.logger.info(f"  - Tổng số lần retry: {retry_total_count}")
                 self.logger.info(f"  - Tổng thời gian: {total_time:.2f} giây ({total_time/60:.2f} phút)")
                 if total_time > 0 and total_download_size > 0:
                     avg_speed_mbps = (total_download_size / 1024 / 1024) / total_time

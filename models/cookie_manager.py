@@ -86,7 +86,17 @@ class CookieManager:
                         "max_concurrent": 3,
                         "video_format": "auto",  # "highest", "high", "medium", "low", "auto"
                         "orientation_filter": "all",  # "all", "vertical", "horizontal"
-                        "orientation_swap": False  # True nếu width/height bị đảo ngược trong API response
+                        "orientation_swap": False,  # True nếu width/height bị đảo ngược trong API response
+                        # Timeout và Retry settings (theo System Instruction)
+                        "download_timeout_seconds": 300,  # Timeout tổng cho mỗi video (5 phút)
+                        "chunk_timeout_seconds": 30,  # Timeout cho mỗi chunk (30 giây) - nếu không có progress trong 30 giây thì coi như bị treo
+                        "max_retries": 3,  # Số lần retry tối đa khi timeout hoặc lỗi
+                        "retry_delay_seconds": 5,  # Thời gian chờ giữa các lần retry (5 giây)
+                        "max_download_time_seconds": 1800,  # Thời gian tối đa cho mỗi video (30 phút) - nếu vượt quá sẽ skip
+                        "enable_timeout_detection": True,  # Bật/tắt phát hiện timeout
+                        "enable_auto_retry": True,  # Bật/tắt tự động retry
+                        "enable_skip_slow_videos": True,  # Bật/tắt skip video quá lâu
+                        "chunk_size": 8192  # Kích thước chunk (bytes) - 8KB mặc định
                     }
                 }
                 self._save_config(default_config)
