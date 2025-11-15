@@ -17,6 +17,22 @@ from datetime import datetime
 class VideoDownloader:
     """Xử lý tải video Douyin"""
     
+    # Compile regex patterns once (theo System Instruction 6 - tối ưu hiệu suất)
+    # Cache regex patterns để tránh compile lại nhiều lần
+    _regex_patterns = {
+        'video_id_patterns': [
+            re.compile(r'/video/(\d+)'),
+            re.compile(r'video_id=(\d+)'),
+            re.compile(r'item_id=(\d+)'),
+            re.compile(r'aweme_id=(\d+)'),
+            re.compile(r'modal_id=(\d+)'),
+        ],
+        'short_id_pattern': re.compile(r'/([A-Za-z0-9]+)/?$'),
+        'script_tag_pattern': re.compile(r'<script[^>]*>(.*?)</script>', re.DOTALL),
+        'user_id_pattern': re.compile(r'/user/([^/?]+)'),
+        'safe_filename_pattern': re.compile(r'[<>:"/\\|?*]'),
+    }
+    
     def __init__(self, cookie: str, log_file: str = None):
         """
         Khởi tạo VideoDownloader
@@ -179,58 +195,81 @@ class VideoDownloader:
             
         Returns:
             URL đã được chuẩn hóa hoặc None nếu không hợp lệ
+            
+        Exceptions:
+            Exception: Lỗi khi resolve short URL hoặc parse URL
         """
-        if not url or not isinstance(url, str):
-            return None
+        function_name = "VideoDownloader.normalize_url"
         
-        url = url.strip()
+        # Log bắt đầu (theo System Instruction)
+        self.log('info', f"Bắt đầu normalize URL: {url[:100] if url else 'None'}...", function_name)
         
-        # Kiểm tra xem có phải direct video URL không
-        is_direct_video = (url.endswith('.mp4') or '.mp4?' in url or 
-                          'zjcdn.com' in url.lower() or 
-                          'douyinstatic.com' in url.lower() or
-                          ('/video/' in url.lower() and 'douyin.com' not in url.lower()))
-        
-        # Nếu là direct video URL, trả về trực tiếp (không cần normalize)
-        if is_direct_video:
-            self.log('info', f"Phát hiện direct video URL, bỏ qua normalize: {url[:100]}...")
-            return url
-        
-        # Kiểm tra xem có phải link Douyin không
-        if "douyin.com" not in url and "iesdouyin.com" not in url:
-            return None
-        
-        # Xử lý short URL (v.douyin.com) - cần resolve redirect
-        if "v.douyin.com" in url or "iesdouyin.com" in url:
-            try:
-                # Tạo session mới không có cookie để resolve redirect
-                # (vì cookie có thể chứa ký tự không hợp lệ)
-                temp_session = requests.Session()
-                temp_session.headers.update({
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-                    "Referer": "https://www.douyin.com/",
-                })
-                # Follow redirect để lấy URL thực tế
-                response = temp_session.get(url, allow_redirects=True, timeout=15)
-                final_url = response.url
-                url = final_url
-                self.log('debug', f"Đã resolve short URL thành: {url}")
-            except Exception as e:
-                self.log('warning', f"Lỗi khi resolve short URL: {e}", exc_info=True)
-                # Nếu không resolve được, trả về URL gốc và thử extract ID trực tiếp
-                pass
-        
-        # Loại bỏ các param thừa, chỉ giữ lại link cơ bản
         try:
-            parsed = urlparse(url)
-            # Giữ lại scheme, netloc, path
-            normalized = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
-            return normalized
+            if not url or not isinstance(url, str):
+                self.log('warning', "URL không hợp lệ (None hoặc không phải string)", function_name)
+                return None
+            
+            url = url.strip()
+            
+            # Kiểm tra xem có phải direct video URL không
+            is_direct_video = (url.endswith('.mp4') or '.mp4?' in url or 
+                              'zjcdn.com' in url.lower() or 
+                              'douyinstatic.com' in url.lower() or
+                              ('/video/' in url.lower() and 'douyin.com' not in url.lower()))
+            
+            # Nếu là direct video URL, trả về trực tiếp (không cần normalize)
+            if is_direct_video:
+                self.log('info', f"Phát hiện direct video URL, bỏ qua normalize: {url[:100]}...", function_name)
+                self.log('info', "Normalize URL hoàn thành - direct video URL", function_name)
+                return url
+            
+            # Kiểm tra xem có phải link Douyin không
+            if "douyin.com" not in url and "iesdouyin.com" not in url:
+                self.log('warning', f"URL không phải link Douyin: {url[:100]}...", function_name)
+                self.log('info', "Normalize URL hoàn thành - không phải link Douyin", function_name)
+                return None
+            
+            # Xử lý short URL (v.douyin.com) - cần resolve redirect
+            if "v.douyin.com" in url or "iesdouyin.com" in url:
+                try:
+                    # Tạo session mới không có cookie để resolve redirect
+                    # (vì cookie có thể chứa ký tự không hợp lệ)
+                    temp_session = requests.Session()
+                    temp_session.headers.update({
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                        "Referer": "https://www.douyin.com/",
+                    })
+                    # Follow redirect để lấy URL thực tế
+                    response = temp_session.get(url, allow_redirects=True, timeout=15)
+                    final_url = response.url
+                    url = final_url
+                    self.log('debug', f"Đã resolve short URL thành: {url}", function_name)
+                except Exception as e:
+                    self.log('warning', f"Lỗi khi resolve short URL: {e}", function_name, exc_info=True)
+                    # Nếu không resolve được, trả về URL gốc và thử extract ID trực tiếp
+                    self.log('debug', "Sử dụng URL gốc (không resolve được redirect)", function_name)
+                    pass
+            
+            # Loại bỏ các param thừa, chỉ giữ lại link cơ bản
+            try:
+                parsed = urlparse(url)
+                # Giữ lại scheme, netloc, path
+                normalized = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+                self.log('info', f"Đã normalize URL thành công: {normalized[:100]}...", function_name)
+                self.log('info', "Normalize URL hoàn thành thành công", function_name)
+                return normalized
+            except Exception as e:
+                self.log('warning', f"Lỗi khi normalize URL: {e}", function_name, exc_info=True)
+                self.log('info', f"Trả về URL gốc: {url[:100]}...", function_name)
+                self.log('info', "Normalize URL hoàn thành - trả về URL gốc", function_name)
+                return url
+                
         except Exception as e:
-            self.log('warning', f"Lỗi khi normalize URL: {e}", exc_info=True)
-            return url
+            # Log lỗi đầy đủ theo System Instruction
+            self.log('error', f"Lỗi không xác định khi normalize URL: {e}", function_name, exc_info=True)
+            return None
     
     def extract_video_id(self, url: str) -> Optional[str]:
         """
@@ -240,23 +279,25 @@ class VideoDownloader:
             url: URL video
             
         Returns:
-            Video ID hoặc None
-        """
-        try:
-            # Pattern cho video ID trong URL Douyin
-            patterns = [
-                r'/video/(\d+)',
-                r'video_id=(\d+)',
-                r'item_id=(\d+)',
-                r'aweme_id=(\d+)',
-                r'modal_id=(\d+)',  # Một số URL format khác
-            ]
+            Video ID hoặc None nếu không tìm thấy
             
-            for pattern in patterns:
-                match = re.search(pattern, url)
+        Exceptions:
+            Exception: Lỗi khi parse URL hoặc extract ID
+        """
+        function_name = "VideoDownloader.extract_video_id"
+        
+        # Log bắt đầu (theo System Instruction)
+        self.log('info', f"Bắt đầu extract video ID từ URL: {url[:100] if url else 'None'}...", function_name)
+        
+        try:
+            # Sử dụng compiled regex patterns (tối ưu hiệu suất - System Instruction 6)
+            # Compile regex một lần và tái sử dụng thay vì compile lại mỗi lần
+            for pattern in self._regex_patterns['video_id_patterns']:
+                match = pattern.search(url)
                 if match:
                     video_id = match.group(1)
-                    self.log('debug', f"Đã tìm thấy video ID: {video_id}")
+                    self.log('debug', f"Đã tìm thấy video ID: {video_id}", function_name)
+                    self.log('info', f"Extract video ID hoàn thành thành công: {video_id}", function_name)
                     return video_id
             
             # Nếu không tìm thấy, thử parse từ query string
@@ -271,20 +312,21 @@ class VideoDownloader:
             
             # Nếu là short URL (v.douyin.com/xxxxx), thử lấy ID từ path
             if 'v.douyin.com' in url or 'iesdouyin.com' in url:
-                # Pattern: v.douyin.com/xxxxx hoặc iesdouyin.com/xxxxx
-                short_pattern = r'/([A-Za-z0-9]+)/?$'
-                match = re.search(short_pattern, parsed.path)
+                # Sử dụng compiled regex pattern (tối ưu hiệu suất)
+                match = self._regex_patterns['short_id_pattern'].search(parsed.path)
                 if match:
                     short_id = match.group(1)
-                    self.log('debug', f"Tìm thấy short ID: {short_id}, cần resolve URL để lấy video ID thực")
+                    self.log('debug', f"Tìm thấy short ID: {short_id}, cần resolve URL để lấy video ID thực", function_name)
                     # Short ID này không phải video ID, cần resolve URL trước
                     # Nhưng nếu normalize_url đã resolve rồi thì sẽ có video ID ở đây
                     return None
             
-            self.log('warning', f"Không tìm thấy video ID trong URL: {url}")
+            self.log('warning', f"Không tìm thấy video ID trong URL: {url}", function_name)
+            self.log('info', "Extract video ID hoàn thành - không tìm thấy", function_name)
             return None
         except Exception as e:
-            self.log('error', f"Lỗi khi trích xuất video ID: {e}", exc_info=True)
+            # Log lỗi đầy đủ theo System Instruction
+            self.log('error', f"Lỗi khi trích xuất video ID: {e}", function_name, exc_info=True)
             return None
     
     def get_video_info(self, url: str) -> Optional[Dict]:
@@ -296,11 +338,20 @@ class VideoDownloader:
             
         Returns:
             Dict chứa thông tin video hoặc None nếu lỗi
+            
+        Exceptions:
+            Exception: Lỗi khi gọi API, parse JSON, hoặc extract video info
         """
+        function_name = "VideoDownloader.get_video_info"
+        
+        # Log bắt đầu (theo System Instruction)
+        self.log('info', f"Bắt đầu lấy thông tin video từ URL: {url[:100] if url else 'None'}...", function_name)
+        
         try:
             # Kiểm tra xem có phải audio file (MP3) không - bỏ qua
             if '.mp3' in url.lower() or 'ies-music' in url.lower() or '/music/' in url.lower():
-                self.log('warning', f"Phát hiện audio file (MP3), bỏ qua: {url[:100]}...")
+                self.log('warning', f"Phát hiện audio file (MP3), bỏ qua: {url[:100]}...", function_name)
+                self.log('info', "Get video info hoàn thành - audio file (bỏ qua)", function_name)
                 return None
             
             # Kiểm tra xem có phải direct video URL không
@@ -311,25 +362,29 @@ class VideoDownloader:
             
             if is_direct_video:
                 # Đây là direct video URL, trả về trực tiếp
-                self.log('info', f"Phát hiện direct video URL: {url[:100]}...")
-                self.log('warning', "Direct video URL có thể hết hạn, nhưng vẫn thử tải")
-                return {
+                self.log('info', f"Phát hiện direct video URL: {url[:100]}...", function_name)
+                self.log('warning', "Direct video URL có thể hết hạn, nhưng vẫn thử tải", function_name)
+                result = {
                     'video_id': None,
                     'title': 'Direct Video',
                     'author': 'Unknown',
                     'video_url': url
                 }
+                self.log('info', "Get video info hoàn thành - direct video URL", function_name)
+                return result
             
             video_id = self.extract_video_id(url)
             if not video_id:
-                self.log('error', f"Không thể trích xuất video ID từ URL: {url}")
+                self.log('error', f"Không thể trích xuất video ID từ URL: {url}", function_name)
+                self.log('info', "Get video info hoàn thành - không thể extract video ID", function_name)
                 return None
             
             # Thử TikVideo.App API trước (nếu có)
-            self.log('debug', "Thử sử dụng TikVideo.App API...")
+            self.log('debug', "Thử sử dụng TikVideo.App API...", function_name)
             tikvideo_result = self._get_video_info_from_tikvideo(url)
             if tikvideo_result:
-                self.log('info', "Đã lấy được thông tin video từ TikVideo.App API!")
+                self.log('info', "Đã lấy được thông tin video từ TikVideo.App API!", function_name)
+                self.log('info', "Get video info hoàn thành thành công (TikVideo.App)", function_name)
                 return tikvideo_result
             
             # Thử nhiều API endpoint khác nhau（JavaScriptコードから学んだ方法を含む）
@@ -345,44 +400,50 @@ class VideoDownloader:
             
             # Thử các API endpoint
             for api_url in api_endpoints:
-                self.log('info', f"Đang gọi API: {api_url}")
-                self.log('debug', f"Cookie length: {len(self.cookie)} characters")
+                self.log('info', f"Đang gọi API: {api_url}", function_name)
+                self.log('debug', f"Cookie length: {len(self.cookie)} characters", function_name)
                 
                 try:
                     response = self.session.get(api_url, timeout=15)
                     
                     # Log API call theo System Instruction
-                    self.log('debug', f"Response status: {response.status_code}")
+                    self.log('debug', f"Response status: {response.status_code}", function_name)
                     content_length = response.headers.get('Content-Length', 'unknown')
-                    self.log('debug', f"Content-Length: {content_length}")
+                    self.log('debug', f"Content-Length: {content_length}", function_name)
                     
                     if response.status_code == 200:
                         # Kiểm tra response có rỗng không
                         if len(response.text) == 0:
-                            self.log('warning', f"Response rỗng từ endpoint: {api_url}")
-                            self.log('warning', "Có thể cookie không hợp lệ hoặc API đã thay đổi")
+                            self.log('warning', f"Response rỗng từ endpoint: {api_url}", function_name)
+                            self.log('warning', "Có thể cookie không hợp lệ hoặc API đã thay đổi", function_name)
                             continue  # Thử endpoint tiếp theo
                         
                         # Thử parse JSON
                         try:
                             data = response.json()
-                            self.log('info', "Đã parse JSON thành công!")
+                            self.log('info', "Đã parse JSON thành công!", function_name)
                             break  # Thành công, thoát khỏi loop
-                        except json.JSONDecodeError:
-                            self.log('warning', f"Response không phải JSON từ endpoint: {api_url}")
+                        except json.JSONDecodeError as je:
+                            self.log('warning', f"Response không phải JSON từ endpoint: {api_url}", function_name)
+                            self.log('debug', f"JSON decode error: {je}", function_name, exc_info=True)
                             continue
                     else:
-                        self.log('warning', f"Status code không phải 200: {response.status_code}")
-                        self.log('error', f"API call failed: {api_url} - Status {response.status_code}")
+                        self.log('warning', f"Status code không phải 200: {response.status_code}", function_name)
+                        self.log('error', f"API call failed: {api_url} - Status {response.status_code}", function_name)
                         continue
                 except Exception as e:
-                    self.log('error', f"Lỗi khi gọi API {api_url}: {e}", exc_info=True)
+                    self.log('error', f"Lỗi khi gọi API {api_url}: {e}", function_name, exc_info=True)
                     continue
             
             # Nếu tất cả API endpoint đều thất bại, thử lấy từ HTML page
             if data is None:
-                self.log('warning', "Tất cả API endpoint đều thất bại, thử lấy từ HTML page...")
-                return self._get_video_info_from_html(url, video_id)
+                self.log('warning', "Tất cả API endpoint đều thất bại, thử lấy từ HTML page...", function_name)
+                result = self._get_video_info_from_html(url, video_id)
+                if result:
+                    self.log('info', "Get video info hoàn thành thành công (HTML parsing)", function_name)
+                else:
+                    self.log('info', "Get video info hoàn thành - không thể lấy thông tin", function_name)
+                return result
             
             # Parse response để lấy link video（JavaScriptコードの方法を参考）
             if 'aweme_detail' in data:
@@ -458,13 +519,28 @@ class VideoDownloader:
                         all_urls.sort(key=lambda x: x.get('quality', 0), reverse=True)
                         video_info['video_urls'] = all_urls
                         video_info['video_url'] = all_urls[0]['url']  # Mặc định chọn chất lượng cao nhất
-                        self.log('info', f"Đã tìm thấy {len(all_urls)} video URL từ play_addr/download_addr")
+                        self.log('info', f"Đã tìm thấy {len(all_urls)} video URL từ play_addr/download_addr", function_name)
+                        self.log('info', "Get video info hoàn thành thành công (API)", function_name)
                         return video_info
                     
-                    self.log('warning', "Không tìm thấy play_addr hoặc download_addr trong video_data")
+                    self.log('warning', "Không tìm thấy play_addr hoặc download_addr trong video_data", function_name)
                 else:
-                    self.log('warning', "Không tìm thấy video trong aweme_detail")
+                    self.log('warning', "Không tìm thấy video trong aweme_detail", function_name)
                 
+                # Nếu có video_info nhưng không có video_url, thử lấy từ HTML
+                if video_info and not video_info.get('video_url'):
+                    self.log('warning', "Video info không có video_url, thử lấy từ HTML...", function_name)
+                    html_result = self._get_video_info_from_html(url, video_id)
+                    if html_result:
+                        # Merge thông tin từ API và HTML
+                        video_info.update(html_result)
+                        self.log('info', "Get video info hoàn thành thành công (API + HTML)", function_name)
+                        return video_info
+                    else:
+                        self.log('info', "Get video info hoàn thành - không có video URL", function_name)
+                        return video_info
+                
+                self.log('info', "Get video info hoàn thành thành công", function_name)
                 return video_info
             elif 'aweme_list' in data:
                 # リスト形式のレスポンス（複数ビデオの場合）
@@ -561,17 +637,30 @@ class VideoDownloader:
             
         Returns:
             Dict chứa thông tin video hoặc None
+            
+        Exceptions:
+            Exception: Lỗi khi lấy HTML hoặc parse HTML
         """
+        function_name = "VideoDownloader._get_video_info_from_html"
+        
+        # Log bắt đầu (theo System Instruction)
+        self.log('info', f"Bắt đầu lấy thông tin video từ HTML: {url[:100] if url else 'None'}...", function_name)
+        self.log('debug', f"Video ID: {video_id}", function_name)
+        
         try:
-            self.log('info', f"Đang lấy HTML từ: {url}")
+            self.log('info', f"Đang lấy HTML từ: {url[:100]}...", function_name)
             response = self.session.get(url, timeout=15)
             
+            # Log API call theo System Instruction
+            self.log('debug', f"Response status: {response.status_code}", function_name)
+            
             if response.status_code != 200:
-                self.log('warning', f"Không thể lấy HTML. Status: {response.status_code}")
+                self.log('warning', f"Không thể lấy HTML. Status: {response.status_code}", function_name)
+                self.log('info', "Get video info from HTML hoàn thành - status code không phải 200", function_name)
                 return None
             
             html_content = response.text
-            self.log('info', f"HTML length: {len(html_content)}")
+            self.log('info', f"HTML length: {len(html_content)} characters", function_name)
             
             # Tìm video URL trong HTML
             # Pattern 1: Tìm trong script tag với JSON data
@@ -590,9 +679,8 @@ class VideoDownloader:
                 r'"url_list":\s*\["([^"]+)"',
             ]
             
-            # Tìm trong script tags
-            script_pattern = r'<script[^>]*>(.*?)</script>'
-            scripts = re.findall(script_pattern, html_content, re.DOTALL)
+            # Tìm trong script tags (sử dụng compiled regex pattern - tối ưu hiệu suất)
+            scripts = self._regex_patterns['script_tag_pattern'].findall(html_content)
             
             for script in scripts:
                 # Tìm JSON data
@@ -637,69 +725,67 @@ class VideoDownloader:
                 for pattern in render_data_patterns:
                     matches = re.findall(pattern, html_content, re.DOTALL)
                     if matches:
-                        print(f"Tìm thấy {len(matches)} match với pattern: {pattern[:50]}...")
+                        self.log('debug', f"Tìm thấy {len(matches)} match với pattern: {pattern[:50]}...", function_name)
                         for i, match in enumerate(matches):
-                            print(f"Đang xử lý match {i+1}/{len(matches)}, length: {len(match)}")
+                            self.log('debug', f"Đang xử lý match {i+1}/{len(matches)}, length: {len(match)}", function_name)
                             
                             # RENDER_DATAは通常URLエンコードされている
                             try:
                                 # Thử decode URL encoded JSON
                                 decoded = urllib.parse.unquote(match)
-                                print(f"Đã decode, length sau decode: {len(decoded)}")
+                                self.log('debug', f"Đã decode, length sau decode: {len(decoded)}", function_name)
                                 
                                 # JSONをパース
                                 data = json.loads(decoded)
-                                print(f"Đã parse JSON thành công! Type: {type(data)}")
+                                self.log('debug', f"Đã parse JSON thành công! Type: {type(data)}", function_name)
                                 
                                 # ビデオURLを抽出
                                 found_url = self._extract_video_url_from_json(data, video_id)
                                 if found_url:
                                     video_url = found_url
-                                    print(f"Tìm thấy video URL trong RENDER_DATA: {video_url[:150]}...")
+                                    self.log('info', f"Tìm thấy video URL trong RENDER_DATA: {video_url[:150]}...", function_name)
                                     break
                                 else:
-                                    print("Không tìm thấy video URL trong JSON data")
+                                    self.log('debug', "Không tìm thấy video URL trong JSON data", function_name)
                                     # Debug: JSON構造を確認
                                     if isinstance(data, dict):
-                                        print(f"Top level keys: {list(data.keys())[:10]}")
+                                        self.log('debug', f"Top level keys: {list(data.keys())[:10]}", function_name)
                                         
                             except urllib.error.UnquoteError as e:
-                                print(f"Lỗi khi decode URL: {e}")
+                                self.log('warning', f"Lỗi khi decode URL: {e}", function_name, exc_info=True)
                                 try:
                                     # Thử parse trực tiếp（既にデコード済みの場合）
                                     data = json.loads(match)
                                     found_url = self._extract_video_url_from_json(data, video_id)
                                     if found_url:
                                         video_url = found_url
-                                        print(f"Tìm thấy video URL trong data (không decode): {video_url[:150]}...")
+                                        self.log('info', f"Tìm thấy video URL trong data (không decode): {video_url[:150]}...", function_name)
                                         break
                                 except json.JSONDecodeError as e2:
-                                    print(f"Lỗi khi parse JSON (không decode): {str(e2)[:200]}")
-                                    # 最初の100文字を表示してデバッグ
-                                    print(f"Match preview: {match[:200]}...")
+                                    self.log('warning', f"Lỗi khi parse JSON (không decode): {str(e2)[:200]}", function_name, exc_info=True)
+                                    # Debug: Match preview
+                                    self.log('debug', f"Match preview: {match[:200]}...", function_name)
                             except json.JSONDecodeError as e:
-                                print(f"Lỗi khi parse JSON: {str(e)[:200]}")
-                                # デコード済みデータの最初の200文字を表示
+                                self.log('warning', f"Lỗi khi parse JSON: {str(e)[:200]}", function_name, exc_info=True)
+                                # Decodedデータの最初の200文字を表示
                                 try:
                                     decoded = urllib.parse.unquote(match)
-                                    print(f"Decoded preview: {decoded[:200]}...")
+                                    self.log('debug', f"Decoded preview: {decoded[:200]}...", function_name)
                                 except:
-                                    print(f"Match preview: {match[:200]}...")
+                                    self.log('debug', f"Match preview: {match[:200]}...", function_name)
                             except Exception as e:
-                                print(f"Lỗi không xác định khi xử lý RENDER_DATA: {type(e).__name__}: {str(e)[:200]}")
-                                import traceback
-                                traceback.print_exc()
+                                # Log lỗi đầy đủ theo System Instruction
+                                self.log('error', f"Lỗi không xác định khi xử lý RENDER_DATA: {type(e).__name__}: {str(e)[:200]}", function_name, exc_info=True)
                     
                     if video_url:
                         break
                 
                 # Nếu vẫn không tìm thấy trong RENDER_DATA, thử tìm trong toàn bộ HTML với pattern khác
                 if not video_url:
-                    print("Đang tìm kiếm trong toàn bộ HTML với pattern khác...")
-                    # Tìm trong script tags với JSON data
-                    script_pattern = r'<script[^>]*>(.*?)</script>'
-                    scripts = re.findall(script_pattern, html_content, re.DOTALL)
-                    print(f"Tìm thấy {len(scripts)} script tags")
+                    self.log('debug', "Đang tìm kiếm trong toàn bộ HTML với pattern khác...", function_name)
+                    # Tìm trong script tags với JSON data (sử dụng compiled regex - tối ưu hiệu suất)
+                    scripts = self._regex_patterns['script_tag_pattern'].findall(html_content)
+                    self.log('debug', f"Tìm thấy {len(scripts)} script tags", function_name)
                     
                     for i, script in enumerate(scripts):
                         # Tìm JSON object trong script
@@ -718,9 +804,10 @@ class VideoDownloader:
                                     found_url = self._extract_video_url_from_json(data, video_id)
                                     if found_url:
                                         video_url = found_url
-                                        print(f"Tìm thấy video URL trong script tag {i}: {video_url[:150]}...")
+                                        self.log('info', f"Tìm thấy video URL trong script tag {i}: {video_url[:150]}...", function_name)
                                         break
-                                except:
+                                except Exception as e:
+                                    self.log('debug', f"Lỗi khi parse JSON trong script tag {i}: {e}", function_name)
                                     pass
                             
                             if video_url:
@@ -731,7 +818,7 @@ class VideoDownloader:
                 
                 # Nếu vẫn chưa tìm thấy, thử tìm tất cả URL pattern（最後の手段）
                 if not video_url:
-                    self.log('info', "Đang tìm kiếm tất cả URL trong HTML (最後の手段)...")
+                    self.log('info', "Đang tìm kiếm tất cả URL trong HTML (最後の手段)...", function_name)
                     all_urls = []
                     direct_patterns = [
                         r'https://[^"\'<>\s]+\.mp4[^"\'<>\s]*',
@@ -742,7 +829,7 @@ class VideoDownloader:
                         matches = re.findall(pattern, html_content)
                         all_urls.extend(matches)
                     
-                    self.log('info', f"Tìm thấy {len(all_urls)} URL trong HTML")
+                    self.log('info', f"Tìm thấy {len(all_urls)} URL trong HTML", function_name)
                     
                     # Loại bỏ các URL không hợp lệ
                     valid_urls = []
@@ -769,16 +856,16 @@ class VideoDownloader:
                     if valid_urls:
                         # Lấy URL đầu tiên (ưu tiên có video ID hoặc aweme)
                         video_url = valid_urls[0]
-                        self.log('info', f"Tìm thấy {len(valid_urls)} URL hợp lệ, chọn: {video_url[:150]}...")
+                        self.log('info', f"Tìm thấy {len(valid_urls)} URL hợp lệ, chọn: {video_url[:150]}...", function_name)
                     else:
-                        self.log('warning', "Không tìm thấy URL hợp lệ trong HTML (tất cả đều bị loại trừ)")
-                        self.log('warning', "WARNING: Không thể tìm thấy video URL hợp lệ từ HTML!")
-                        self.log('warning', "Có thể cần cookie mới hoặc video không khả dụng.")
+                        self.log('warning', "Không tìm thấy URL hợp lệ trong HTML (tất cả đều bị loại trừ)", function_name)
+                        self.log('warning', "WARNING: Không thể tìm thấy video URL hợp lệ từ HTML!", function_name)
+                        self.log('warning', "Có thể cần cookie mới hoặc video không khả dụng.", function_name)
                         # Debug: hiển thị một số URL để kiểm tra
                         if all_urls:
-                            self.log('debug', f"Tất cả URL tìm thấy (để debug):")
+                            self.log('debug', f"Tất cả URL tìm thấy (để debug): {len(all_urls)} URLs", function_name)
                             for i, url in enumerate(all_urls[:5]):  # Chỉ hiển thị 5 URL đầu
-                                self.log('debug', f"  {i+1}. {url[:100]}...")
+                                self.log('debug', f"  {i+1}. {url[:100]}...", function_name)
                 
                 # Nếu vẫn không tìm thấy, thử tìm trong JSON string
                 if not video_url:
@@ -819,15 +906,15 @@ class VideoDownloader:
                 
                 # Kiểm tra URL hợp lệ
                 if not video_url.startswith('http'):
-                    self.log('warning', f"URL không hợp lệ (không bắt đầu bằng http): {video_url[:100]}")
+                    self.log('warning', f"URL không hợp lệ (không bắt đầu bằng http): {video_url[:100]}", function_name)
                     video_url = None
                 elif len(video_url) < 20:
-                    self.log('warning', f"URL quá ngắn: {video_url}")
+                    self.log('warning', f"URL quá ngắn: {video_url}", function_name)
                     video_url = None
                 
                 if video_url:
-                    self.log('info', f"Tìm thấy video URL trong HTML: {video_url[:150]}...")
-                    self.log('info', f"Video URL length: {len(video_url)}")
+                    self.log('info', f"Tìm thấy video URL trong HTML: {video_url[:150]}...", function_name)
+                    self.log('info', f"Video URL length: {len(video_url)}", function_name)
                     
                     # HTMLからauthor情報も取得を試みる
                     author_from_html = 'Unknown'
@@ -842,21 +929,23 @@ class VideoDownloader:
                             match = re.search(pattern, html_content)
                             if match:
                                 author_from_html = match.group(1)
-                                self.log('info', f"Tìm thấy author từ HTML: {author_from_html}")
+                                self.log('info', f"Tìm thấy author từ HTML: {author_from_html}", function_name)
                                 break
                     except Exception as e:
-                        self.log('warning', f"Không thể lấy author từ HTML: {e}")
+                        self.log('warning', f"Không thể lấy author từ HTML: {e}", function_name, exc_info=True)
                     
-                    return {
+                    result = {
                         'video_id': video_id,
                         'title': '',
                         'author': author_from_html,
                         'video_url': video_url
                     }
+                    self.log('info', "Get video info from HTML hoàn thành thành công", function_name)
+                    return result
             
             # Nếu vẫn không tìm thấy, thử tìm trong window._UNIVERSAL_DATA hoặc tương tự
             if not video_url:
-                self.log('info', "Đang tìm kiếm trong window data...")
+                self.log('info', "Đang tìm kiếm trong window data...", function_name)
                 window_patterns = [
                     r'window\._UNIVERSAL_DATA\s*=\s*({.+?});',
                     r'window\._SSR_HYDRATED_DATA\s*=\s*({.+?});',
@@ -874,54 +963,63 @@ class VideoDownloader:
                                 data = json.loads(decoded)
                                 video_url = self._extract_video_url_from_json(data, video_id)
                                 if video_url:
-                                    self.log('info', f"Tìm thấy video URL trong window data: {video_url[:150]}...")
+                                    self.log('info', f"Tìm thấy video URL trong window data: {video_url[:150]}...", function_name)
                                     
                                     # JSONからauthor情報も取得を試みる
                                     author_from_json = 'Unknown'
                                     try:
                                         author_from_json = self._extract_author_from_json(data)
                                         if author_from_json:
-                                            self.log('info', f"Tìm thấy author từ JSON: {author_from_json}")
+                                            self.log('info', f"Tìm thấy author từ JSON: {author_from_json}", function_name)
                                     except Exception as e:
-                                        self.log('warning', f"Không thể lấy author từ JSON: {e}")
+                                        self.log('warning', f"Không thể lấy author từ JSON: {e}", function_name, exc_info=True)
                                     
-                                    return {
+                                    result = {
                                         'video_id': video_id,
                                         'title': '',
                                         'author': author_from_json,
                                         'video_url': video_url
                                     }
+                                    self.log('info', "Get video info from HTML hoàn thành thành công (window data)", function_name)
+                                    return result
                             except Exception as e:
+                                self.log('debug', f"Lỗi khi parse window data (match {i}): {e}", function_name, exc_info=True)
                                 try:
                                     # Thử parse trực tiếp
                                     data = json.loads(match)
                                     video_url = self._extract_video_url_from_json(data, video_id)
                                     if video_url:
-                                        self.log('info', f"Tìm thấy video URL trong window data: {video_url[:150]}...")
+                                        self.log('info', f"Tìm thấy video URL trong window data: {video_url[:150]}...", function_name)
                                         
                                         # JSONからauthor情報も取得を試みる
                                         author_from_json = 'Unknown'
                                         try:
                                             author_from_json = self._extract_author_from_json(data)
                                             if author_from_json:
-                                                self.log('info', f"Tìm thấy author từ JSON: {author_from_json}")
+                                                self.log('info', f"Tìm thấy author từ JSON: {author_from_json}", function_name)
                                         except Exception as e:
-                                            self.log('warning', f"Không thể lấy author từ JSON: {e}")
+                                            self.log('warning', f"Không thể lấy author từ JSON: {e}", function_name, exc_info=True)
                                         
-                                        return {
+                                        result = {
                                             'video_id': video_id,
                                             'title': '',
                                             'author': author_from_json,
                                             'video_url': video_url
                                         }
+                                        self.log('info', "Get video info from HTML hoàn thành thành công (window data - parse trực tiếp)", function_name)
+                                        return result
                                 except Exception as e2:
+                                    self.log('debug', f"Lỗi khi parse trực tiếp: {e2}", function_name, exc_info=True)
                                     pass
             
-            self.log('warning', "Không tìm thấy video URL trong HTML")
+            self.log('warning', "Không tìm thấy video URL trong HTML", function_name)
+            self.log('info', "Get video info from HTML hoàn thành - không tìm thấy video URL", function_name)
             return None
                 
         except Exception as e:
-            self.log('error', f"Lỗi khi lấy thông tin từ HTML: {e}", exc_info=True)
+            # Log lỗi đầy đủ theo System Instruction
+            self.log('error', f"Lỗi khi lấy thông tin từ HTML: {e}", function_name, exc_info=True)
+            self.log('info', "Get video info from HTML hoàn thành - Exception", function_name)
             return None
     
     def _extract_author_from_json(self, data: dict, depth: int = 0, max_depth: int = 5) -> Optional[str]:
@@ -1205,9 +1303,8 @@ class VideoDownloader:
         video_urls = []
         
         try:
-            # Extract sec_user_id từ URL
-            import re
-            match = re.search(r'/user/([^/?]+)', user_url)
+            # Extract sec_user_id từ URL (sử dụng compiled regex - tối ưu hiệu suất)
+            match = self._regex_patterns['user_id_pattern'].search(user_url)
             if not match:
                 self.log('error', f"Không thể trích xuất user ID từ URL: {user_url}")
                 if progress_callback:
@@ -1646,16 +1743,18 @@ class VideoDownloader:
                                         'file_size': downloaded_size
                                     }
                         
-                        # Log tiến trình mỗi 500 chunks hoặc mỗi 25% (giảm log spam)
+                        # Log tiến trình mỗi 1000 chunks hoặc mỗi 25% (giảm log spam - System Instruction 6.2)
+                        # Tăng từ 500 lên 1000 chunks để giảm log I/O operations
                         if content_length:
                             progress = (downloaded_size / file_size) * 100
                             progress_int = int(progress)
-                            if chunk_count % 500 == 0 or (progress_int % 25 == 0 and chunk_count % 100 == 0):
-                                self.log('debug', f"Đã tải: {downloaded_size} / {file_size} bytes ({progress:.1f}%)")
+                            # Log mỗi 1000 chunks hoặc mỗi 25% progress (giảm log spam)
+                            if chunk_count % 1000 == 0 or (progress_int % 25 == 0 and chunk_count % 500 == 0):
+                                self.log('debug', f"Đã tải: {downloaded_size} / {file_size} bytes ({progress:.1f}%)", function_name)
                         else:
-                            # Không có content_length, log mỗi 500 chunks
-                            if chunk_count % 500 == 0:
-                                self.log('debug', f"Đã tải: {downloaded_size} bytes ({chunk_count} chunks)")
+                            # Không có content_length, log mỗi 1000 chunks (tăng từ 500)
+                            if chunk_count % 1000 == 0:
+                                self.log('debug', f"Đã tải: {downloaded_size} bytes ({chunk_count} chunks)", function_name)
             
             # Kiểm tra file đã tải
             end_time = time.time()
@@ -2003,8 +2102,8 @@ class VideoDownloader:
             
             # Bước 4: Tạo thư mục theo tên người dùng
             # Làm sạch tên người dùng (loại bỏ ký tự không hợp lệ cho tên thư mục)
-            import re
-            safe_author = re.sub(r'[<>:"/\\|?*]', '_', author.strip())
+            # Sử dụng compiled regex pattern (tối ưu hiệu suất)
+            safe_author = self._regex_patterns['safe_filename_pattern'].sub('_', author.strip())
             if not safe_author or safe_author == '':
                 safe_author = 'Unknown'
             

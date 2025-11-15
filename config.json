@@ -4,8 +4,8 @@
   "settings": {
     "naming_mode": "video_id",
     "max_concurrent": 3,
-    "video_format": "highest",
-    "orientation_filter": "all",
+    "video_format": "auto",
+    "orientation_filter": "horizontal",
     "orientation_swap": false
   }
 }
