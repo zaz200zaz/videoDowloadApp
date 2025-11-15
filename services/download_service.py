@@ -4,6 +4,7 @@ Download Service
 """
 
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Callable, Optional
 from services.video_downloader import VideoDownloader
 
@@ -124,8 +125,11 @@ class DownloadService:
         complete_callback: Optional[Callable[[], None]],
         timeout_settings: Optional[dict] = None
     ):
-        """ダウンロードワーカースレッド"""
+        """ダウンロードワーカースレッド（並行処理対応）"""
         import time
+        import os
+        from models.cookie_manager import CookieManager
+        
         total = len(links)
         success_count = 0
         failed_count = 0
@@ -141,8 +145,17 @@ class DownloadService:
         filtered_by_orientation_count = 0
         filtered_videos_info = []  # Danh sách video bị filter để hiển thị cho user
         
+        # Lấy max_concurrent từ config (theo System Instruction - tối ưu tốc độ tải)
+        max_concurrent = 3  # Default
+        try:
+            cookie_manager = CookieManager()
+            config = cookie_manager._load_config(use_cache=True)
+            max_concurrent = config.get('settings', {}).get('max_concurrent', 3)
+        except Exception as e:
+            if self.logger:
+                self.logger.warning(f"Không thể lấy max_concurrent từ config, sử dụng default: {max_concurrent} - {e}")
+        
         # Đảm bảo download_folder là絶対パス
-        import os
         download_folder = os.path.abspath(download_folder)
         
         if self.logger:
@@ -153,138 +166,255 @@ class DownloadService:
             self.logger.info(f"  - Naming mode: {naming_mode}")
             self.logger.info(f"  - Video format: {video_format}")
             self.logger.info(f"  - Orientation filter: {orientation_filter}")
+            self.logger.info(f"  - Max concurrent downloads: {max_concurrent} (tối ưu tốc độ tải)")
             self.logger.info(f"  - Thread ID: {threading.current_thread().ident}")
             self.logger.info("=" * 60)
         
-        try:
-            for idx, link in enumerate(links):
-                # 停止シグナルをチェック（各ビデオの処理前）
-                if self.should_stop:
-                    if self.logger:
-                        self.logger.warning(f"Download stopped by user at video {idx+1}/{total} - breaking loop")
-                    break
+        # Thread-safe counters cho progress tracking (theo System Instruction - logging đầy đủ)
+        completed_count = 0
+        completed_lock = threading.Lock()
+        
+        # Danh sách lưu thời gian download cho mỗi video (theo System Instruction - log thời gian từng video)
+        video_times = {}  # {idx: {'start': time, 'end': time, 'duration': time, 'url': url}}
+        video_times_lock = threading.Lock()
+        
+        def process_single_video(idx: int, link: str) -> Dict:
+            """
+            Process một video (được gọi từ ThreadPoolExecutor)
+            
+            Args:
+                idx: Index của video (0-based)
+                link: URL của video
                 
-                # 進捗を更新
-                if progress_callback:
-                    progress = (idx / total) * 100
-                    progress_callback(progress, idx, total)
-                
-                # ビデオを処理
-                if self.logger:
+            Returns:
+                Dict kết quả với thêm idx để track
+            """
+            video_start_time = time.time()
+            
+            # Log thời gian bắt đầu (theo System Instruction - log thời gian từng video)
+            if self.logger:
+                with video_times_lock:
+                    video_times[idx] = {
+                        'start': video_start_time,
+                        'url': link,
+                        'status': 'processing'
+                    }
                     self.logger.info("-" * 60)
                     self.logger.info(f"Processing video {idx+1}/{total}")
                     self.logger.info(f"  - URL: {link}")
+                    self.logger.info(f"  - Start time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(video_start_time))}")
                     self.logger.info(f"  - Should stop: {self.should_stop}")
-                
-                # 停止シグナルを再度チェック
+            
+            try:
+                # Kiểm tra stop signal trước khi bắt đầu (theo System Instruction - không thay đổi chức năng gốc)
                 if self.should_stop:
                     if self.logger:
-                        self.logger.warning("Download stopped by user - before processing video")
-                    break
-                
-                try:
-                    # Gọi process_video với timeout_settings
-                    result = self.downloader.process_video(
-                        link, download_folder, naming_mode, video_format, orientation_filter, timeout_settings
-                    )
-                    
-                    # Thu thập thống kê từ result
-                    retry_total_count += result.get('retry_count', 0)
-                    if result.get('timeout_detected'):
-                        timeout_count += 1
-                    if result.get('skipped'):
-                        skipped_count += 1
-                    
-                    # Thu thập thống kê orientation filter (mới)
-                    if result.get('filtered_by_orientation'):
-                        filtered_by_orientation_count += 1
-                        # Lưu thông tin video bị filter để hiển thị cho user
-                        filtered_videos_info.append({
-                            'video_id': result.get('video_id', 'N/A'),
-                            'url': link,
-                            'author': result.get('author', 'N/A'),
-                            'orientation': result.get('orientation', 'unknown'),
-                            'width': result.get('width', 0),
-                            'height': result.get('height', 0),
-                            'error': result.get('error', 'Unknown error')
-                        })
-                    
-                    # 結果をログに記録
-                    if self.logger:
-                        if result.get('success'):
-                            success_count += 1
-                            file_path = result.get('file_path', '')
-                            if file_path and os.path.exists(file_path):
-                                # Sử dụng file_size từ result nếu có, nếu không thì lấy từ file system
-                                file_size = result.get('file_size', 0)
-                                if file_size == 0:
-                                    file_size = os.path.getsize(file_path)
-                                total_download_size += file_size
-                            self.logger.info(f"  ✓ Video {idx+1} downloaded successfully")
-                            self.logger.info(f"    - File path: {result.get('file_path', 'N/A')}")
-                            self.logger.info(f"    - Video ID: {result.get('video_id', 'N/A')}")
-                            self.logger.info(f"    - Author: {result.get('author', 'N/A')}")
-                            # Log thống kê timeout và retry
-                            if result.get('retry_count', 0) > 0:
-                                self.logger.info(f"    - Retry count: {result.get('retry_count', 0)}")
-                            if result.get('timeout_detected'):
-                                self.logger.warning(f"    - Timeout detected: True (đã retry {result.get('retry_count', 0)} lần)")
-                            if result.get('download_time', 0) > 0:
-                                self.logger.debug(f"    - Download time: {result.get('download_time', 0):.2f}s")
-                        else:
-                            failed_count += 1
-                            self.logger.warning(f"  ✗ Video {idx+1} failed")
-                            self.logger.warning(f"    - Error: {result.get('error', 'Unknown error')}")
-                            self.logger.warning(f"    - URL: {link}")
-                            # Log thống kê timeout và retry cho video thất bại
-                            if result.get('retry_count', 0) > 0:
-                                self.logger.warning(f"    - Retry count: {result.get('retry_count', 0)}")
-                            if result.get('timeout_detected'):
-                                self.logger.warning(f"    - Timeout detected: True (sau {result.get('retry_count', 0)} lần retry)")
-                            if result.get('skipped'):
-                                self.logger.warning(f"    - Skipped: True (video quá lâu)")
-                            # Log thống kê orientation filter cho video thất bại (mới)
-                            if result.get('filtered_by_orientation'):
-                                self.logger.info(f"    - Filtered by orientation: True")
-                                self.logger.info(f"    - Video orientation: {result.get('orientation', 'unknown')}")
-                                if result.get('width', 0) > 0 and result.get('height', 0) > 0:
-                                    aspect_ratio = result.get('width', 0) / result.get('height', 0)
-                                    self.logger.info(f"    - Video size: {result.get('width', 0)}x{result.get('height', 0)} (aspect ratio: {aspect_ratio:.2f})")
-                    
-                    # 処理後に再度停止シグナルをチェック
-                    if self.should_stop:
-                        if self.logger:
-                            self.logger.warning("Download stopped by user - after processing video")
-                        break
-                    
-                    # 結果をコールバック
-                    if result_callback:
-                        try:
-                            result_callback(result)
-                        except Exception as e:
-                            if self.logger:
-                                self.logger.error(f"Error in result_callback: {e}", exc_info=True)
-                
-                except Exception as e:
-                    failed_count += 1
-                    if self.logger:
-                        self.logger.error(f"Exception while processing video {idx+1}: {e}", exc_info=True)
-                        self.logger.error(f"  - URL: {link}")
-                    
-                    # エラー結果を作成
-                    error_result = {
+                        self.logger.warning(f"Download stopped by user before processing video {idx+1}")
+                    return {
                         'success': False,
                         'video_id': None,
                         'file_path': None,
-                        'error': f"Exception: {str(e)}",
-                        'url': link
+                        'error': 'Stopped by user',
+                        'url': link,
+                        'idx': idx,
+                        'download_time': 0
                     }
-                    if result_callback:
-                        try:
-                            result_callback(error_result)
-                        except Exception as e2:
-                            if self.logger:
-                                self.logger.error(f"Error in result_callback for error result: {e2}", exc_info=True)
+                
+                # Gọi process_video với timeout_settings
+                result = self.downloader.process_video(
+                    link, download_folder, naming_mode, video_format, orientation_filter, timeout_settings
+                )
+                
+                video_end_time = time.time()
+                video_duration = video_end_time - video_start_time
+                
+                # Log thời gian download (theo System Instruction - log thời gian từng video)
+                if self.logger:
+                    with video_times_lock:
+                        video_times[idx]['end'] = video_end_time
+                        video_times[idx]['duration'] = video_duration
+                        video_times[idx]['status'] = 'success' if result.get('success') else 'failed'
+                    
+                    self.logger.info(f"  - End time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(video_end_time))}")
+                    self.logger.info(f"  - Download duration: {video_duration:.2f} seconds ({video_duration/60:.2f} minutes)")
+                    if video_duration > 300:  # Nếu > 5 phút, log warning (theo System Instruction - xác định video mất thời gian bất thường)
+                        self.logger.warning(f"  - ⚠️ Video {idx+1} mất thời gian bất thường: {video_duration:.2f}s ({video_duration/60:.2f} phút)")
+                
+                # Thêm idx và download_time vào result
+                result['idx'] = idx
+                result['download_time'] = video_duration
+                result['url'] = link
+                
+                return result
+                
+            except Exception as e:
+                video_end_time = time.time()
+                video_duration = video_end_time - video_start_time
+                
+                # Log thời gian và lỗi (theo System Instruction - logging đầy đủ)
+                if self.logger:
+                    with video_times_lock:
+                        video_times[idx]['end'] = video_end_time
+                        video_times[idx]['duration'] = video_duration
+                        video_times[idx]['status'] = 'error'
+                    
+                    self.logger.error(f"Exception while processing video {idx+1}: {e}", exc_info=True)
+                    self.logger.error(f"  - URL: {link}")
+                    self.logger.error(f"  - Duration before error: {video_duration:.2f}s")
+                
+                # Tạo error result
+                error_result = {
+                    'success': False,
+                    'video_id': None,
+                    'file_path': None,
+                    'error': f"Exception: {str(e)}",
+                    'url': link,
+                    'idx': idx,
+                    'download_time': video_duration
+                }
+                return error_result
+        
+        try:
+            # Sử dụng ThreadPoolExecutor để tải song song (theo System Instruction - tối ưu tốc độ tải)
+            if self.logger:
+                self.logger.info(f"Bắt đầu tải {total} video với {max_concurrent} workers đồng thời...")
+            
+            # Tạo list tasks với index
+            tasks = [(idx, link) for idx, link in enumerate(links)]
+            
+            # Sử dụng ThreadPoolExecutor để tải song song (theo System Instruction - dùng đa luồng để tối ưu tốc độ)
+            with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
+                # Submit tất cả tasks
+                future_to_idx = {executor.submit(process_single_video, idx, link): idx 
+                                for idx, link in tasks}
+                
+                # Xử lý kết quả khi hoàn thành (theo System Instruction - logging đầy đủ)
+                for future in as_completed(future_to_idx):
+                    # Kiểm tra stop signal (theo System Instruction - không thay đổi chức năng gốc)
+                    if self.should_stop:
+                        if self.logger:
+                            self.logger.warning("Download stopped by user - canceling remaining tasks")
+                        # Cancel các tasks còn lại
+                        for f in future_to_idx:
+                            if not f.done():
+                                f.cancel()
+                        break
+                    
+                    idx = future_to_idx[future]
+                    try:
+                        result = future.result()
+                        
+                        # Cập nhật progress (theo System Instruction - logging đầy đủ)
+                        with completed_lock:
+                            completed_count += 1
+                            current_progress = (completed_count / total) * 100
+                            
+                            # Update progress callback
+                            if progress_callback:
+                                try:
+                                    progress_callback(current_progress, completed_count, total)
+                                except Exception as e:
+                                    if self.logger:
+                                        self.logger.error(f"Error in progress_callback: {e}", exc_info=True)
+                        
+                        # Thu thập thống kê từ result
+                        retry_total_count += result.get('retry_count', 0)
+                        if result.get('timeout_detected'):
+                            timeout_count += 1
+                        if result.get('skipped'):
+                            skipped_count += 1
+                        
+                        # Thu thập thống kê orientation filter (mới)
+                        if result.get('filtered_by_orientation'):
+                            filtered_by_orientation_count += 1
+                            # Lưu thông tin video bị filter để hiển thị cho user
+                            filtered_videos_info.append({
+                                'video_id': result.get('video_id', 'N/A'),
+                                'url': result.get('url', 'N/A'),
+                                'author': result.get('author', 'N/A'),
+                                'orientation': result.get('orientation', 'unknown'),
+                                'width': result.get('width', 0),
+                                'height': result.get('height', 0),
+                                'error': result.get('error', 'Unknown error')
+                            })
+                        
+                        # Log kết quả chi tiết (theo System Instruction - logging đầy đủ từng bước)
+                        if self.logger:
+                            if result.get('success'):
+                                success_count += 1
+                                file_path = result.get('file_path', '')
+                                if file_path and os.path.exists(file_path):
+                                    # Sử dụng file_size từ result nếu có, nếu không thì lấy từ file system
+                                    file_size = result.get('file_size', 0)
+                                    if file_size == 0:
+                                        file_size = os.path.getsize(file_path)
+                                    total_download_size += file_size
+                                
+                                video_idx = result.get('idx', idx) + 1
+                                self.logger.info(f"  ✓ Video {video_idx} downloaded successfully")
+                                self.logger.info(f"    - File path: {result.get('file_path', 'N/A')}")
+                                self.logger.info(f"    - Video ID: {result.get('video_id', 'N/A')}")
+                                self.logger.info(f"    - Author: {result.get('author', 'N/A')}")
+                                self.logger.info(f"    - Download time: {result.get('download_time', 0):.2f}s ({result.get('download_time', 0)/60:.2f} phút)")
+                                
+                                # Log thống kê timeout và retry
+                                if result.get('retry_count', 0) > 0:
+                                    self.logger.info(f"    - Retry count: {result.get('retry_count', 0)}")
+                                if result.get('timeout_detected'):
+                                    self.logger.warning(f"    - Timeout detected: True (đã retry {result.get('retry_count', 0)} lần)")
+                            else:
+                                failed_count += 1
+                                video_idx = result.get('idx', idx) + 1
+                                self.logger.warning(f"  ✗ Video {video_idx} failed")
+                                self.logger.warning(f"    - Error: {result.get('error', 'Unknown error')}")
+                                self.logger.warning(f"    - URL: {result.get('url', 'N/A')}")
+                                self.logger.warning(f"    - Download time: {result.get('download_time', 0):.2f}s ({result.get('download_time', 0)/60:.2f} phút)")
+                                
+                                # Log thống kê timeout và retry cho video thất bại
+                                if result.get('retry_count', 0) > 0:
+                                    self.logger.warning(f"    - Retry count: {result.get('retry_count', 0)}")
+                                if result.get('timeout_detected'):
+                                    self.logger.warning(f"    - Timeout detected: True (sau {result.get('retry_count', 0)} lần retry)")
+                                if result.get('skipped'):
+                                    self.logger.warning(f"    - Skipped: True (video quá lâu)")
+                                # Log thống kê orientation filter cho video thất bại (mới)
+                                if result.get('filtered_by_orientation'):
+                                    self.logger.info(f"    - Filtered by orientation: True")
+                                    self.logger.info(f"    - Video orientation: {result.get('orientation', 'unknown')}")
+                                    if result.get('width', 0) > 0 and result.get('height', 0) > 0:
+                                        aspect_ratio = result.get('width', 0) / result.get('height', 0)
+                                        self.logger.info(f"    - Video size: {result.get('width', 0)}x{result.get('height', 0)} (aspect ratio: {aspect_ratio:.2f})")
+                        
+                        # 結果をコールバック
+                        if result_callback:
+                            try:
+                                result_callback(result)
+                            except Exception as e:
+                                if self.logger:
+                                    self.logger.error(f"Error in result_callback: {e}", exc_info=True)
+                        
+                    except Exception as e:
+                        failed_count += 1
+                        if self.logger:
+                            self.logger.error(f"Error getting result from future for video {idx+1}: {e}", exc_info=True)
+                            self.logger.error(f"  - URL: {links[idx] if idx < len(links) else 'N/A'}")
+                        
+                        # エラー結果を作成
+                        error_result = {
+                            'success': False,
+                            'video_id': None,
+                            'file_path': None,
+                            'error': f"Future error: {str(e)}",
+                            'url': links[idx] if idx < len(links) else 'N/A',
+                            'idx': idx,
+                            'download_time': 0
+                        }
+                        if result_callback:
+                            try:
+                                result_callback(error_result)
+                            except Exception as e2:
+                                if self.logger:
+                                    self.logger.error(f"Error in result_callback for error result: {e2}", exc_info=True)
         
         except Exception as e:
             if self.logger:
@@ -325,6 +455,36 @@ class DownloadService:
                     avg_speed_kbps = (total_download_size / 1024) / total_time
                     self.logger.info(f"  - Tổng dung lượng đã tải: {total_download_size / 1024 / 1024:.2f} MB")
                     self.logger.info(f"  - Tốc độ trung bình: {avg_speed_mbps:.2f} MB/s ({avg_speed_kbps:.2f} KB/s)")
+                
+                # Log thống kê thời gian download từng video (theo System Instruction - log thời gian từng video)
+                if 'video_times' in locals() and video_times:
+                    self.logger.info("=" * 60)
+                    self.logger.info("Thống kê thời gian download từng video:")
+                    sorted_videos = sorted(video_times.items(), key=lambda x: x[0])
+                    for vid_idx, vid_info in sorted_videos:
+                        duration = vid_info.get('duration', 0)
+                        url = vid_info.get('url', 'N/A')
+                        status = vid_info.get('status', 'unknown')
+                        status_icon = "✓" if status == 'success' else "✗" if status == 'failed' else "⚠"
+                        self.logger.info(f"  {status_icon} Video {vid_idx+1}: {duration:.2f}s ({duration/60:.2f} phút) - {url[:80]}...")
+                    
+                    # Xác định video mất thời gian bất thường (theo System Instruction - xác định video mất thời gian bất thường)
+                    if len(video_times) > 0:
+                        durations = [v.get('duration', 0) for v in video_times.values() if v.get('duration', 0) > 0]
+                        if durations:
+                            avg_duration = sum(durations) / len(durations)
+                            slow_videos = [(vid_idx, vid_info) for vid_idx, vid_info in video_times.items() 
+                                         if vid_info.get('duration', 0) > avg_duration * 2]  # > 2x trung bình
+                            if slow_videos:
+                                self.logger.warning("=" * 60)
+                                self.logger.warning("Cảnh báo: Các video mất thời gian bất thường (> 2x trung bình):")
+                                for vid_idx, vid_info in slow_videos:
+                                    duration = vid_info.get('duration', 0)
+                                    url = vid_info.get('url', 'N/A')
+                                    self.logger.warning(f"  ⚠️ Video {vid_idx+1}: {duration:.2f}s ({duration/60:.2f} phút) - {url[:80]}...")
+                                self.logger.warning(f"  - Trung bình: {avg_duration:.2f}s")
+                                self.logger.warning("=" * 60)
+                
                 self.logger.info(f"  - Should stop: {self.should_stop}")
                 self.logger.info("=" * 60)
             

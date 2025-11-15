@@ -5,7 +5,7 @@
     "naming_mode": "video_id",
     "max_concurrent": 3,
     "video_format": "auto",
-    "orientation_filter": "vertical",
+    "orientation_filter": "horizontal",
     "orientation_swap": false
   }
 }
