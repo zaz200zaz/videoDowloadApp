@@ -7,7 +7,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import threading
 import os
-from typing import List, Callable, Optional
+from typing import List, Callable, Optional, Dict
 import queue
 import logging
 
@@ -427,11 +427,11 @@ class MainWindow:
                         messagebox.showwarning("Cảnh báo", "Không tìm thấy link hợp lệ trong file!")
                 except Exception as e:
                     if self.logger:
-                        self.logger.error(f"Import links - Lỗi khi đọc file với encoding khác: {e}")
+                        self.logger.error(f"Import links - Lỗi khi đọc file với encoding khác: {e}", exc_info=True)
                     messagebox.showerror("Lỗi", f"Không thể đọc file với encoding khác: {e}")
             except Exception as e:
                 if self.logger:
-                    self.logger.error(f"Import links - Lỗi khi đọc file: {e}")
+                    self.logger.error(f"Import links - Lỗi khi đọc file: {e}", exc_info=True)
                 messagebox.showerror("Lỗi", f"Không thể đọc file: {e}")
     
     def _get_user_videos(self):
@@ -589,7 +589,7 @@ class MainWindow:
                         )
                     except Exception as e:
                         if self.logger:
-                            self.logger.error(f"Lấy video từ user - Lỗi khi lưu file: {e}")
+                            self.logger.error(f"Lấy video từ user - Lỗi khi lưu file: {e}", exc_info=True)
                         messagebox.showerror("Lỗi", f"Không thể lưu file: {e}")
                 else:
                     if self.logger:
@@ -784,7 +784,7 @@ class MainWindow:
                 subprocess.Popen(['xdg-open', download_folder])
         except Exception as e:
             if self.logger:
-                self.logger.error(f"Mở thư mục download - Lỗi: {e}")
+                self.logger.error(f"Mở thư mục download - Lỗi: {e}", exc_info=True)
             messagebox.showerror("Lỗi", f"Không thể mở thư mục:\n{download_folder}\n\nLỗi: {e}")
     
     def _open_log_folder(self):
@@ -809,6 +809,8 @@ class MainWindow:
             else:  # Linux
                 subprocess.Popen(['xdg-open', log_dir])
         except Exception as e:
+            if self.logger:
+                self.logger.error(f"Mở thư mục log - Lỗi: {e}", exc_info=True)
             messagebox.showerror("Lỗi", f"Không thể mở thư mục log: {e}\n\nThư mục log: {log_dir}")
     
     def _delete_downloaded_videos(self):
@@ -960,6 +962,12 @@ class MainWindow:
                 url = url.rstrip('.,;!?')
                 
                 # Kiểm tra URL có hợp lệ không
+                # Bỏ qua audio file (MP3)
+                if '.mp3' in url.lower() or 'ies-music' in url.lower() or '/music/' in url.lower():
+                    if self.logger:
+                        self.logger.debug(f"_get_links - Dòng {idx+1}: Bỏ qua audio file (MP3): {url[:100]}...")
+                    continue
+                
                 # Chấp nhận cả video page URL và direct video URL
                 is_douyin_page = 'douyin.com' in url.lower() or 'v.douyin.com' in url.lower() or 'iesdouyin.com' in url.lower()
                 is_direct_video = (url.endswith('.mp4') or '.mp4?' in url or 
@@ -976,7 +984,7 @@ class MainWindow:
                     # Direct video URL (có thể hết hạn nhưng vẫn thử)
                     links.append(url)
                     if self.logger:
-                        self.logger.warning(f"_get_links - Dòng {idx+1}: Thêm direct video URL (có thể hết hạn): {url[:100]}...")
+                        self.logger.debug(f"_get_links - Dòng {idx+1}: Thêm direct video URL (có thể hết hạn): {url[:100]}...")
                 else:
                     if self.logger:
                         self.logger.debug(f"_get_links - Dòng {idx+1}: Bỏ qua URL không hợp lệ: {url[:100]}...")
@@ -1022,9 +1030,17 @@ class MainWindow:
             return
         
         # Controllerを使用してダウンロードを開始
-        success, error = self.download_controller.initialize_downloader(self.logger)
-        if not success:
-            messagebox.showerror("Lỗi", error)
+        try:
+            success, error = self.download_controller.initialize_downloader(self.logger)
+            if not success:
+                if self.logger:
+                    self.logger.error(f"Bắt đầu tải - Không thể khởi tạo downloader: {error}")
+                messagebox.showerror("Lỗi", error)
+                return
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Bắt đầu tải - Exception khi khởi tạo downloader: {e}", exc_info=True)
+            messagebox.showerror("Lỗi", f"Lỗi khi khởi tạo downloader: {e}")
             return
         
         # Reset trạng thái
@@ -1042,15 +1058,24 @@ class MainWindow:
             self.status_tree.insert('', tk.END, values=(link, 'Đang chờ...', ''))
         
         # Controllerを使用してダウンロードを開始
-        success, error = self.download_controller.start_download(
-            links=links,
-            progress_callback=self._on_progress_update,
-            result_callback=self._on_download_result,
-            complete_callback=self._on_download_complete
-        )
-        
-        if not success:
-            messagebox.showerror("Lỗi", error)
+        try:
+            success, error = self.download_controller.start_download(
+                links=links,
+                progress_callback=self._on_progress_update,
+                result_callback=self._on_download_result,
+                complete_callback=self._on_download_complete
+            )
+            
+            if not success:
+                if self.logger:
+                    self.logger.error(f"Bắt đầu tải - Lỗi: {error}")
+                messagebox.showerror("Lỗi", error)
+                self.start_btn.config(state=tk.NORMAL)
+                self.stop_btn.config(state=tk.DISABLED)
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Bắt đầu tải - Exception: {e}", exc_info=True)
+            messagebox.showerror("Lỗi", f"Lỗi khi bắt đầu tải: {e}")
             self.start_btn.config(state=tk.NORMAL)
             self.stop_btn.config(state=tk.DISABLED)
     
@@ -1060,32 +1085,43 @@ class MainWindow:
     
     def _on_download_result(self, result: Dict):
         """ダウンロード結果コールバック"""
-        # 絶対パスに変換
-        if result.get('file_path'):
-            file_path = result.get('file_path')
-            if not os.path.isabs(file_path):
-                download_folder = self.cookie_manager.get_download_folder()
-                if download_folder:
-                    file_path = os.path.join(download_folder, file_path)
-                    result['file_path'] = file_path
-        
-        self.results.append(result)
-        # UIを更新
-        url = result.get('url', '')
-        status = "✓ Thành công" if result.get('success') else f"✗ {result.get('error', 'Lỗi')}"
-        file_path = result.get('file_path', '')
-        file_basename = os.path.basename(file_path) if file_path else ''
-        
-        # Treeviewを更新
-        self.root.after(0, lambda: self._update_status_in_treeview(url, status, file_basename))
+        try:
+            if self.logger:
+                self.logger.debug(f"_on_download_result - Received result: success={result.get('success')}, video_id={result.get('video_id')}")
+            
+            # 絶対パスに変換
+            if result.get('file_path'):
+                file_path = result.get('file_path')
+                if not os.path.isabs(file_path):
+                    download_folder = self.cookie_manager.get_download_folder()
+                    if download_folder:
+                        file_path = os.path.join(download_folder, file_path)
+                        result['file_path'] = file_path
+            
+            self.results.append(result)
+            # UIを更新
+            url = result.get('url', '')
+            status = "✓ Thành công" if result.get('success') else f"✗ {result.get('error', 'Lỗi')}"
+            file_path = result.get('file_path', '')
+            file_basename = os.path.basename(file_path) if file_path else ''
+            
+            # Treeviewを更新
+            self.root.after(0, lambda: self._update_status_in_treeview(url, status, file_basename))
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error in _on_download_result: {e}", exc_info=True)
     
     def _update_status_in_treeview(self, url: str, status: str, file_basename: str):
         """Treeviewのステータスを更新"""
-        for item in self.status_tree.get_children():
-            values = self.status_tree.item(item, 'values')
-            if len(values) >= 1 and values[0] == url:
-                self.status_tree.item(item, values=(url, status, file_basename))
-                break
+        try:
+            for item in self.status_tree.get_children():
+                values = self.status_tree.item(item, 'values')
+                if len(values) >= 1 and values[0] == url:
+                    self.status_tree.item(item, values=(url, status, file_basename))
+                    break
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error in _update_status_in_treeview: {e}", exc_info=True)
     
     def _on_download_complete(self):
         """ダウンロード完了コールバック"""
@@ -1093,8 +1129,14 @@ class MainWindow:
     
     def _update_progress(self, progress: float, current: int, total: int):
         """Cập nhật progress bar"""
-        self.progress_var.set(progress)
-        self.progress_label.config(text=f"Đang tải {current}/{total}...")
+        try:
+            self.progress_var.set(progress)
+            self.progress_label.config(text=f"Đang tải {current}/{total}...")
+            if self.logger and current % 10 == 0:  # Log mỗi 10 video để tránh spam
+                self.logger.debug(f"Progress update: {current}/{total} ({progress:.1f}%)")
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Error in _update_progress: {e}", exc_info=True)
     
     def _download_complete(self):
         """Hoàn tất quá trình tải"""

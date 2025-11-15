@@ -38,9 +38,14 @@ class VideoDownloader:
         try:
             if log_file is None:
                 # Tạo file log với timestamp
-                # Sử dụng __file__ để lấy thư mục của script
+                # Sử dụng __file__ để lấy thư mục của script, sau đó lên một cấp để đến project root
                 script_dir = os.path.dirname(os.path.abspath(__file__))
-                log_dir = os.path.join(script_dir, "logs")
+                # Nếu script_dir là services/, lên một cấp để đến project root
+                if os.path.basename(script_dir) == 'services':
+                    project_root = os.path.dirname(script_dir)
+                else:
+                    project_root = script_dir
+                log_dir = os.path.join(project_root, "logs")
                 os.makedirs(log_dir, exist_ok=True)
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 log_file = os.path.join(log_dir, f"douyin_downloader_{timestamp}.log")
@@ -59,8 +64,10 @@ class VideoDownloader:
             # File handler
             file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='w')
             file_handler.setLevel(logging.DEBUG)
+            # Format theo System Instruction: [timestamp] [LEVEL] [Function] Message
+            # Note: write_log() hoặc log() với function name đã thêm [Function] vào message
             file_format = logging.Formatter(
-                '%(asctime)s - %(levelname)s - %(message)s',
+                '[%(asctime)s] [%(levelname)s] %(message)s',
                 datefmt='%Y-%m-%d %H:%M:%S'
             )
             file_handler.setFormatter(file_format)
@@ -69,16 +76,27 @@ class VideoDownloader:
             # Console handler
             console_handler = logging.StreamHandler()
             console_handler.setLevel(logging.INFO)
-            console_format = logging.Formatter('%(levelname)s - %(message)s')
+            # Console format cũng theo System Instruction
+            console_format = logging.Formatter('[%(levelname)s] %(message)s')
             console_handler.setFormatter(console_format)
             self.logger.addHandler(console_handler)
             
+            # Tắt urllib3 DEBUG logs (theo System Instruction)
+            logging.getLogger('urllib3').setLevel(logging.WARNING)
+            logging.getLogger('urllib3.connectionpool').setLevel(logging.WARNING)
+            
             self.log_file_path = log_file
-            self.logger.info(f"Logging initialized. Log file: {log_file}")
-            print(f"[LOG] Log file created: {log_file}")
+            self.logger.info(f"[VideoDownloader._setup_logging] Logging initialized. Log file: {log_file}")
+            # Không dùng print(), dùng log thay vì (theo System Instruction)
         except Exception as e:
             # Nếu không thể tạo log file, vẫn tiếp tục nhưng không có logging
-            print(f"[WARNING] Không thể tạo log file: {e}")
+            # Log lỗi này (nếu có logger cơ bản)
+            try:
+                import logging
+                temp_logger = logging.getLogger('VideoDownloader')
+                temp_logger.warning(f"[VideoDownloader._setup_logging] Không thể tạo log file: {e}")
+            except:
+                pass
             # Tạo logger mặc định (chỉ console)
             self.logger = logging.getLogger('VideoDownloader')
             self.logger.setLevel(logging.INFO)
@@ -88,29 +106,49 @@ class VideoDownloader:
             self.logger.addHandler(console_handler)
             self.log_file_path = None
     
-    def log(self, level: str, message: str):
+    def log(self, level: str, message: str, function: str = None, exc_info=None):
         """
-        Ghi log với level cụ thể
+        Ghi log với level cụ thể theo System Instruction format
         
         Args:
             level: 'debug', 'info', 'warning', 'error', 'critical'
             message: Nội dung log
+            function: Tên function (nếu None, tự động lấy từ stack trace)
+            exc_info: Nếu True, thêm exception info (stack trace)
         """
+        # Lấy function name nếu không được cung cấp
+        if function is None:
+            import inspect
+            frame = inspect.currentframe().f_back
+            function = frame.f_code.co_name
+            # Thêm class name nếu có
+            if 'self' in frame.f_locals:
+                class_name = frame.f_locals['self'].__class__.__name__
+                function = f"{class_name}.{function}"
+        
+        # Format message theo System Instruction: [Function] Message
+        formatted_message = f"[{function}] {message}"
+        
         if level.lower() == 'debug':
-            self.logger.debug(message)
+            self.logger.debug(formatted_message, exc_info=exc_info)
         elif level.lower() == 'info':
-            self.logger.info(message)
+            self.logger.info(formatted_message, exc_info=exc_info)
         elif level.lower() == 'warning':
-            self.logger.warning(message)
+            self.logger.warning(formatted_message, exc_info=exc_info)
         elif level.lower() == 'error':
-            self.logger.error(message)
+            self.logger.error(formatted_message, exc_info=exc_info)
         elif level.lower() == 'critical':
-            self.logger.critical(message)
+            self.logger.critical(formatted_message, exc_info=exc_info)
         else:
-            self.logger.info(message)
+            self.logger.info(formatted_message, exc_info=exc_info)
     
     def _setup_session(self):
         """Thiết lập session với headers và cookie"""
+        # Tắt urllib3 DEBUG logs để giảm log file size (theo System Instruction)
+        import logging
+        logging.getLogger('urllib3').setLevel(logging.WARNING)
+        logging.getLogger('urllib3.connectionpool').setLevel(logging.WARNING)
+        
         # Làm sạch cookie (loại bỏ whitespace và ký tự không hợp lệ)
         clean_cookie = self.cookie.strip()
         # Loại bỏ newline và tab trong cookie
@@ -129,10 +167,8 @@ class VideoDownloader:
         # Debug: kiểm tra cookie có được set đúng không
         if len(clean_cookie) > 0:
             self.log('info', f"Cookie đã được set (length: {len(clean_cookie)})")
-            print(f"Cookie đã được set (length: {len(clean_cookie)})")
         else:
             self.log('warning', "WARNING: Cookie rỗng!")
-            print("WARNING: Cookie rỗng!")
     
     def normalize_url(self, url: str) -> Optional[str]:
         """
@@ -180,9 +216,9 @@ class VideoDownloader:
                 response = temp_session.get(url, allow_redirects=True, timeout=15)
                 final_url = response.url
                 url = final_url
-                print(f"Đã resolve short URL thành: {url}")
+                self.log('debug', f"Đã resolve short URL thành: {url}")
             except Exception as e:
-                print(f"Lỗi khi resolve short URL: {e}")
+                self.log('warning', f"Lỗi khi resolve short URL: {e}", exc_info=True)
                 # Nếu không resolve được, trả về URL gốc và thử extract ID trực tiếp
                 pass
         
@@ -192,7 +228,8 @@ class VideoDownloader:
             # Giữ lại scheme, netloc, path
             normalized = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
             return normalized
-        except Exception:
+        except Exception as e:
+            self.log('warning', f"Lỗi khi normalize URL: {e}", exc_info=True)
             return url
     
     def extract_video_id(self, url: str) -> Optional[str]:
@@ -219,7 +256,7 @@ class VideoDownloader:
                 match = re.search(pattern, url)
                 if match:
                     video_id = match.group(1)
-                    print(f"Đã tìm thấy video ID: {video_id}")
+                    self.log('debug', f"Đã tìm thấy video ID: {video_id}")
                     return video_id
             
             # Nếu không tìm thấy, thử parse từ query string
@@ -239,15 +276,15 @@ class VideoDownloader:
                 match = re.search(short_pattern, parsed.path)
                 if match:
                     short_id = match.group(1)
-                    print(f"Tìm thấy short ID: {short_id}, cần resolve URL để lấy video ID thực")
+                    self.log('debug', f"Tìm thấy short ID: {short_id}, cần resolve URL để lấy video ID thực")
                     # Short ID này không phải video ID, cần resolve URL trước
                     # Nhưng nếu normalize_url đã resolve rồi thì sẽ có video ID ở đây
                     return None
             
-            print(f"Không tìm thấy video ID trong URL: {url}")
+            self.log('warning', f"Không tìm thấy video ID trong URL: {url}")
             return None
         except Exception as e:
-            print(f"Lỗi khi trích xuất video ID: {e}")
+            self.log('error', f"Lỗi khi trích xuất video ID: {e}", exc_info=True)
             return None
     
     def get_video_info(self, url: str) -> Optional[Dict]:
@@ -261,6 +298,11 @@ class VideoDownloader:
             Dict chứa thông tin video hoặc None nếu lỗi
         """
         try:
+            # Kiểm tra xem có phải audio file (MP3) không - bỏ qua
+            if '.mp3' in url.lower() or 'ies-music' in url.lower() or '/music/' in url.lower():
+                self.log('warning', f"Phát hiện audio file (MP3), bỏ qua: {url[:100]}...")
+                return None
+            
             # Kiểm tra xem có phải direct video URL không
             is_direct_video = (url.endswith('.mp4') or '.mp4?' in url or 
                               'zjcdn.com' in url.lower() or 
@@ -281,14 +323,13 @@ class VideoDownloader:
             video_id = self.extract_video_id(url)
             if not video_id:
                 self.log('error', f"Không thể trích xuất video ID từ URL: {url}")
-                print(f"Không thể trích xuất video ID từ URL: {url}")
                 return None
             
             # Thử TikVideo.App API trước (nếu có)
-            print("Thử sử dụng TikVideo.App API...")
+            self.log('debug', "Thử sử dụng TikVideo.App API...")
             tikvideo_result = self._get_video_info_from_tikvideo(url)
             if tikvideo_result:
-                print("Đã lấy được thông tin video từ TikVideo.App API!")
+                self.log('info', "Đã lấy được thông tin video từ TikVideo.App API!")
                 return tikvideo_result
             
             # Thử nhiều API endpoint khác nhau（JavaScriptコードから学んだ方法を含む）
@@ -306,50 +347,41 @@ class VideoDownloader:
             for api_url in api_endpoints:
                 self.log('info', f"Đang gọi API: {api_url}")
                 self.log('debug', f"Cookie length: {len(self.cookie)} characters")
-                print(f"Đang gọi API: {api_url}")
-                print(f"Cookie length: {len(self.cookie)} characters")
                 
                 try:
                     response = self.session.get(api_url, timeout=15)
                     
+                    # Log API call theo System Instruction
                     self.log('debug', f"Response status: {response.status_code}")
                     content_length = response.headers.get('Content-Length', 'unknown')
                     self.log('debug', f"Content-Length: {content_length}")
-                    print(f"Response status: {response.status_code}")
-                    print(f"Content-Length: {content_length}")
                     
                     if response.status_code == 200:
                         # Kiểm tra response có rỗng không
                         if len(response.text) == 0:
                             self.log('warning', f"Response rỗng từ endpoint: {api_url}")
                             self.log('warning', "Có thể cookie không hợp lệ hoặc API đã thay đổi")
-                            print(f"Response rỗng từ endpoint: {api_url}")
-                            print("Có thể cookie không hợp lệ hoặc API đã thay đổi")
                             continue  # Thử endpoint tiếp theo
                         
                         # Thử parse JSON
                         try:
                             data = response.json()
                             self.log('info', "Đã parse JSON thành công!")
-                            print("Đã parse JSON thành công!")
                             break  # Thành công, thoát khỏi loop
                         except json.JSONDecodeError:
                             self.log('warning', f"Response không phải JSON từ endpoint: {api_url}")
-                            print(f"Response không phải JSON từ endpoint: {api_url}")
                             continue
                     else:
                         self.log('warning', f"Status code không phải 200: {response.status_code}")
-                        print(f"Status code không phải 200: {response.status_code}")
+                        self.log('error', f"API call failed: {api_url} - Status {response.status_code}")
                         continue
                 except Exception as e:
-                    self.log('error', f"Lỗi khi gọi API {api_url}: {e}")
-                    print(f"Lỗi khi gọi API {api_url}: {e}")
+                    self.log('error', f"Lỗi khi gọi API {api_url}: {e}", exc_info=True)
                     continue
             
             # Nếu tất cả API endpoint đều thất bại, thử lấy từ HTML page
             if data is None:
                 self.log('warning', "Tất cả API endpoint đều thất bại, thử lấy từ HTML page...")
-                print("Tất cả API endpoint đều thất bại, thử lấy từ HTML page...")
                 return self._get_video_info_from_html(url, video_id)
             
             # Parse response để lấy link video（JavaScriptコードの方法を参考）
@@ -427,12 +459,11 @@ class VideoDownloader:
                         video_info['video_urls'] = all_urls
                         video_info['video_url'] = all_urls[0]['url']  # Mặc định chọn chất lượng cao nhất
                         self.log('info', f"Đã tìm thấy {len(all_urls)} video URL từ play_addr/download_addr")
-                        print(f"Đã tìm thấy {len(all_urls)} video URL từ play_addr/download_addr")
                         return video_info
                     
-                    print("Không tìm thấy play_addr hoặc download_addr trong video_data")
+                    self.log('warning', "Không tìm thấy play_addr hoặc download_addr trong video_data")
                 else:
-                    print("Không tìm thấy video trong aweme_detail")
+                    self.log('warning', "Không tìm thấy video trong aweme_detail")
                 
                 return video_info
             elif 'aweme_list' in data:
@@ -505,22 +536,19 @@ class VideoDownloader:
                             video_info['video_urls'] = all_urls
                             video_info['video_url'] = all_urls[0]['url']
                             self.log('info', f"Đã tìm thấy {len(all_urls)} video URL từ aweme_list")
-                            print(f"Đã tìm thấy {len(all_urls)} video URL từ aweme_list")
                             return video_info
                     
                     return None
             else:
-                print(f"Response không chứa 'aweme_detail' hoặc 'aweme_list'. Keys: {data.keys() if isinstance(data, dict) else 'Not a dict'}")
+                self.log('warning', f"Response không chứa 'aweme_detail' hoặc 'aweme_list'. Keys: {data.keys() if isinstance(data, dict) else 'Not a dict'}")
                 # Thử lấy từ HTML
                 return self._get_video_info_from_html(url, video_id)
             
         except requests.exceptions.RequestException as e:
-            print(f"Lỗi khi lấy thông tin video: {e}")
+            self.log('error', f"Lỗi khi lấy thông tin video: {e}", exc_info=True)
             return None
         except Exception as e:
-            print(f"Lỗi không xác định: {e}")
-            import traceback
-            traceback.print_exc()
+            self.log('error', f"Lỗi không xác định khi lấy thông tin video: {e}", exc_info=True)
             return None
     
     def _get_video_info_from_html(self, url: str, video_id: str) -> Optional[Dict]:
@@ -973,12 +1001,12 @@ class VideoDownloader:
                 if key in data:
                     value = data[key]
                     if isinstance(value, str) and is_valid_video_url(value):
-                        print(f"Tìm thấy video URL trong key '{key}' (depth {depth})")
+                        self.log('debug', f"Tìm thấy video URL trong key '{key}' (depth {depth})")
                         return value
                     elif isinstance(value, list) and len(value) > 0:
                         for item in value:
                             if isinstance(item, str) and is_valid_video_url(item):
-                                print(f"Tìm thấy video URL trong key '{key}' list (depth {depth})")
+                                self.log('debug', f"Tìm thấy video URL trong key '{key}' list (depth {depth})")
                                 return item
                     elif isinstance(value, dict):
                         result = self._extract_video_url_from_json(value, video_id, depth + 1, max_depth)
@@ -993,7 +1021,7 @@ class VideoDownloader:
                     if isinstance(video_data, dict):
                         result = self._extract_video_url_from_json(video_data, video_id, depth + 1, max_depth)
                         if result:
-                            print(f"Tìm thấy video URL trong '{video_key}' (depth {depth})")
+                            self.log('debug', f"Tìm thấy video URL trong '{video_key}' (depth {depth})")
                             return result
                     elif isinstance(video_data, list) and len(video_data) > 0:
                         for item in video_data:
@@ -1008,7 +1036,7 @@ class VideoDownloader:
                 if isinstance(app_data, dict):
                     result = self._extract_video_url_from_json(app_data, video_id, depth + 1, max_depth)
                     if result:
-                        print(f"Tìm thấy video URL trong 'app' (depth {depth})")
+                        self.log('debug', f"Tìm thấy video URL trong 'app' (depth {depth})")
                         return result
             
             # Recursive search trong các giá trị khác
@@ -1054,7 +1082,7 @@ class VideoDownloader:
             
             for api_url in api_endpoints:
                 try:
-                    print(f"Thử gọi TikVideo API: {api_url}")
+                    self.log('debug', f"Thử gọi TikVideo API: {api_url}")
                     
                     # POSTリクエストでURLを送信
                     headers = {
@@ -1080,12 +1108,13 @@ class VideoDownloader:
                                 timeout=30
                             )
                             
-                            print(f"TikVideo API response status: {response.status_code}")
+                            # Log API call theo System Instruction
+                            self.log('debug', f"TikVideo API response status: {response.status_code}")
                             
                             if response.status_code == 200:
                                 try:
                                     data = response.json()
-                                    print(f"TikVideo API response keys: {data.keys() if isinstance(data, dict) else 'Not a dict'}")
+                                    self.log('debug', f"TikVideo API response keys: {data.keys() if isinstance(data, dict) else 'Not a dict'}")
                                     
                                     # レスポンス構造に応じてビデオURLを抽出
                                     video_url = None
@@ -1124,7 +1153,7 @@ class VideoDownloader:
                                                         break
                                     
                                     if video_url:
-                                        print(f"Tìm thấy video URL từ TikVideo API: {video_url[:150]}...")
+                                        self.log('info', f"Tìm thấy video URL từ TikVideo API: {video_url[:150]}...")
                                         return {
                                             'video_id': self.extract_video_id(url) or '',
                                             'title': data.get('title', data.get('desc', '')),
@@ -1139,7 +1168,7 @@ class VideoDownloader:
                                     if video_url_match:
                                         video_url = video_url_match.group(0)
                                         if 'douyin_pc_client' not in video_url.lower():
-                                            print(f"Tìm thấy video URL từ TikVideo HTML: {video_url[:150]}...")
+                                            self.log('info', f"Tìm thấy video URL từ TikVideo HTML: {video_url[:150]}...")
                                             return {
                                                 'video_id': self.extract_video_id(url) or '',
                                                 'title': '',
@@ -1148,20 +1177,18 @@ class VideoDownloader:
                                             }
                                     
                         except Exception as e:
-                            print(f"Lỗi khi gọi TikVideo API {api_url} với payload {payload}: {e}")
+                            self.log('error', f"Lỗi khi gọi TikVideo API {api_url} với payload {payload}: {e}", exc_info=True)
                             continue
                     
                 except Exception as e:
-                    print(f"Lỗi khi kết nối TikVideo API {api_url}: {e}")
+                    self.log('error', f"Lỗi khi kết nối TikVideo API {api_url}: {e}", exc_info=True)
                     continue
             
-            print("Không thể lấy thông tin từ TikVideo.App API")
+            self.log('warning', "Không thể lấy thông tin từ TikVideo.App API")
             return None
             
         except Exception as e:
-            print(f"Lỗi khi gọi TikVideo API: {e}")
-            import traceback
-            traceback.print_exc()
+            self.log('error', f"Lỗi khi gọi TikVideo API: {e}", exc_info=True)
             return None
     
     def get_all_videos_from_user(self, user_url: str, progress_callback=None) -> List[str]:
@@ -1182,14 +1209,14 @@ class VideoDownloader:
             import re
             match = re.search(r'/user/([^/?]+)', user_url)
             if not match:
+                self.log('error', f"Không thể trích xuất user ID từ URL: {user_url}")
                 if progress_callback:
                     progress_callback(0, 0, f"Không thể trích xuất user ID từ URL: {user_url}")
-                print(f"Không thể trích xuất user ID từ URL: {user_url}")
                 return []
             
             sec_user_id = match.group(1)
             self.log('info', f"User ID extracted: {sec_user_id}")
-            print(f"User ID: {sec_user_id}")
+            self.log('debug', f"User ID: {sec_user_id}")
             
             if progress_callback:
                 progress_callback(0, 0, f"Đang kết nối với user ID: {sec_user_id}...")
@@ -1206,14 +1233,19 @@ class VideoDownloader:
                     api_url = f"https://www.douyin.com/aweme/v1/web/aweme/post/?device_platform=webapp&aid=6383&channel=channel_pc_web&sec_user_id={sec_user_id}&max_cursor={max_cursor}&count=20&version_code=170400&version_name=17.4.0"
                     
                     message = f"Đang tải trang {page_count}... (Đã tìm thấy {len(video_urls)} video)"
+                    self.log('info', message)
                     if progress_callback:
                         progress_callback(len(video_urls), 0, message)
-                    print(message)
                     
+                    # Log API call theo System Instruction
+                    self.log('info', f"Đang gọi API: {api_url}")
                     response = self.session.get(api_url, timeout=15)
                     
+                    # Log API response theo System Instruction
+                    self.log('debug', f"API response status: {response.status_code}")
                     if response.status_code != 200:
-                        print(f"HTTP Error: {response.status_code}")
+                        self.log('warning', f"HTTP Error: {response.status_code}")
+                        self.log('error', f"API call failed: {api_url} - Status {response.status_code}")
                         error_count += 1
                         import time
                         time.sleep(2)
@@ -1231,7 +1263,6 @@ class VideoDownloader:
                     
                     if not data or 'aweme_list' not in data:
                         self.log('warning', "Không tìm thấy video data, thử lại...")
-                        print("Không tìm thấy video data, thử lại...")
                         error_count += 1
                         import time
                         time.sleep(3)
@@ -1307,21 +1338,21 @@ class VideoDownloader:
                             # Nếu có direct video URL, sử dụng nó (giống như douyin-video-links1.txt)
                             if video_url:
                                 self.log('info', f"Tìm thấy direct video URL cho aweme_id={aweme_id}: {video_url[:100]}...")
+                                self.log('debug', f"Thêm video (direct URL): {video_url[:100]}... (Author: {author_nickname})")
                                 video_urls.append(video_url)
-                                print(f"  Thêm video (direct URL): {video_url[:100]}... (Author: {author_nickname})")
                             else:
                                 # Nếu không có direct URL, sử dụng video page URL (fallback)
                                 video_page_url = f"https://www.douyin.com/video/{aweme_id}"
                                 video_urls.append(video_page_url)
                                 self.log('warning', f"Không tìm thấy direct video URL cho aweme_id={aweme_id}, sử dụng video page URL: {video_page_url}")
-                                print(f"  Thêm video (page URL): {video_page_url} (Author: {author_nickname})")
+                                self.log('debug', f"Thêm video (page URL): {video_page_url} (Author: {author_nickname})")
                             
                             # Cập nhật tiến trình cho từng video
                             if progress_callback:
                                 message = f"Đang xử lý video {len(video_urls)}... (Trang {page_count}, Video {idx+1}/{videos_in_page}, Author: {author_nickname})"
                                 progress_callback(len(video_urls), 0, message)
                     
-                    print(f"Đã tìm thấy {len(video_urls)} video")
+                    self.log('info', f"Đã tìm thấy {len(video_urls)} video")
                     
                     # Cập nhật tiến trình sau khi xử lý xong trang
                     if progress_callback:
@@ -1334,7 +1365,7 @@ class VideoDownloader:
                     
                 except Exception as e:
                     error_msg = f"Lỗi khi lấy video: {e}"
-                    print(error_msg)
+                    self.log('error', error_msg, exc_info=True)
                     if progress_callback:
                         progress_callback(len(video_urls), 0, f"Lỗi: {error_msg}, đang thử lại...")
                     error_count += 1
@@ -1342,15 +1373,13 @@ class VideoDownloader:
                     time.sleep(3)
             
             final_message = f"Hoàn thành! Tổng cộng {len(video_urls)} video"
-            print(final_message)
+            self.log('info', final_message)
             if progress_callback:
                 progress_callback(len(video_urls), len(video_urls), final_message)
             return video_urls
             
         except Exception as e:
-            print(f"Lỗi khi lấy video từ user: {e}")
-            import traceback
-            traceback.print_exc()
+            self.log('error', f"Lỗi khi lấy video từ user: {e}", exc_info=True)
             return []
     
     def _select_video_url(self, video_info: Dict, video_format: str = "auto") -> Optional[str]:
@@ -1409,30 +1438,135 @@ class VideoDownloader:
         Returns:
             True nếu tải thành công, False nếu lỗi
         """
+        self.log('info', "=" * 60)
+        self.log('info', "VideoDownloader.download_video - Bắt đầu")
+        self.log('info', f"  - Video URL: {video_url[:100]}...")
+        # Đảm bảo save_path là絶対パスで表示
+        save_path_abs = os.path.abspath(save_path)
+        self.log('info', f"  - Save path: {save_path_abs}")
+        
+        # Ghi lại thời gian bắt đầu
+        import time
+        start_time = time.time()
+        
         try:
+            # Kiểm tra thư mục
+            save_dir = os.path.dirname(save_path)
+            if not os.path.exists(save_dir):
+                self.log('info', f"Thư mục không tồn tại, đang tạo: {save_dir}")
+                os.makedirs(save_dir, exist_ok=True)
+            
+            self.log('info', "Đang gửi request để tải video...")
             response = self.session.get(video_url, stream=True, timeout=30)
             response.raise_for_status()
             
-            # Tạo thư mục nếu chưa tồn tại
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            # Lấy thông tin về file size nếu có
+            content_length = response.headers.get('Content-Length')
+            if content_length:
+                file_size = int(content_length)
+                self.log('info', f"File size: {file_size} bytes ({file_size / 1024 / 1024:.2f} MB)")
+            else:
+                self.log('warning', "Không thể lấy file size từ header")
+                file_size = None
+            
+            self.log('info', "Đang tải file...")
+            downloaded_size = 0
+            chunk_count = 0
             
             # Tải file
             with open(save_path, 'wb') as f:
                 for chunk in response.iter_content(chunk_size=8192):
                     # 停止シグナルをチェック（各チャンクの処理中）
                     if hasattr(self, '_service_ref') and self._service_ref and self._service_ref.should_stop:
-                        self.log('info', "Download stopped by user during file download")
+                        self.log('warning', "Download stopped by user during file download")
+                        # ファイルハンドルを閉じる（with文なので自動的に閉じられるが、明示的にflush）
+                        try:
+                            f.flush()
+                        except Exception as e:
+                            self.log('warning', f"Lỗi khi flush file: {e}")
+                        # Xóa file đã tải một phần（リトライ付き）
+                        try:
+                            # with文から抜ける前にファイルを閉じる必要がある
+                            # ファイルはwith文の終了時に自動的に閉じられる
+                            import time
+                            time.sleep(0.2)  # ファイルハンドルが閉じられるまで少し待つ
+                            
+                            if os.path.exists(save_path):
+                                # リトライロジック
+                                max_retries = 3
+                                for retry in range(max_retries):
+                                    try:
+                                        os.remove(save_path)
+                                        self.log('info', f"Đã xóa file đã tải một phần (thử lần {retry+1})")
+                                        break
+                                    except PermissionError as pe:
+                                        if retry < max_retries - 1:
+                                            self.log('debug', f"File đang được sử dụng, đợi 0.5 giây rồi thử lại... (thử lần {retry+1}/{max_retries})")
+                                            time.sleep(0.5)
+                                        else:
+                                            self.log('warning', f"Không thể xóa file đã tải một phần sau {max_retries} lần thử: {pe}")
+                                            self.log('warning', f"File sẽ được giữ lại: {save_path_abs}")
+                                    except Exception as e:
+                                        self.log('error', f"Lỗi khi xóa file đã tải một phần: {e}", exc_info=True)
+                                        break
+                        except Exception as e:
+                            self.log('error', f"Lỗi khi xóa file đã tải một phần: {e}", exc_info=True)
                         return False
                     if chunk:
                         f.write(chunk)
+                        downloaded_size += len(chunk)
+                        chunk_count += 1
+                        
+                        # Log tiến trình mỗi 500 chunks hoặc mỗi 25% (giảm log spam)
+                        if content_length:
+                            progress = (downloaded_size / file_size) * 100
+                            # Log mỗi 25% (0, 25, 50, 75, 100) hoặc mỗi 500 chunks
+                            progress_int = int(progress)
+                            if chunk_count % 500 == 0 or (progress_int % 25 == 0 and chunk_count % 100 == 0):
+                                self.log('debug', f"Đã tải: {downloaded_size} / {file_size} bytes ({progress:.1f}%)")
+                        else:
+                            # Không có content_length, log mỗi 500 chunks
+                            if chunk_count % 500 == 0:
+                                self.log('debug', f"Đã tải: {downloaded_size} bytes ({chunk_count} chunks)")
             
-            return True
+            # Kiểm tra file đã tải
+            end_time = time.time()
+            download_time = end_time - start_time
             
+            if os.path.exists(save_path):
+                actual_size = os.path.getsize(save_path)
+                
+                # Tính toán tốc độ tải
+                if download_time > 0:
+                    download_speed_mbps = (actual_size / 1024 / 1024) / download_time
+                    download_speed_kbps = (actual_size / 1024) / download_time
+                    self.log('info', f"Đã tải thành công - File size: {actual_size} bytes ({actual_size / 1024 / 1024:.2f} MB)")
+                    self.log('info', f"Thời gian tải: {download_time:.2f} giây ({download_time/60:.2f} phút)")
+                    self.log('info', f"Tốc độ tải: {download_speed_mbps:.2f} MB/s ({download_speed_kbps:.2f} KB/s)")
+                else:
+                    self.log('info', f"Đã tải thành công - File size: {actual_size} bytes ({actual_size / 1024 / 1024:.2f} MB)")
+                    self.log('info', f"Thời gian tải: < 0.01 giây")
+                
+                if content_length and actual_size != file_size:
+                    self.log('warning', f"File size không khớp: expected {file_size}, actual {actual_size}")
+                self.log('info', "=" * 60)
+                return True
+            else:
+                self.log('error', "File không tồn tại sau khi tải")
+                self.log('error', "=" * 60)
+                return False
+            
+        except requests.exceptions.Timeout as e:
+            self.log('error', f"Timeout khi tải video: {e}", exc_info=True)
+            self.log('error', "=" * 60)
+            return False
         except requests.exceptions.RequestException as e:
-            print(f"Lỗi khi tải video: {e}")
+            self.log('error', f"Request error khi tải video: {e}", exc_info=True)
+            self.log('error', "=" * 60)
             return False
         except Exception as e:
-            print(f"Lỗi không xác định khi tải: {e}")
+            self.log('error', f"Lỗi không xác định khi tải: {e}", exc_info=True)
+            self.log('error', "=" * 60)
             return False
     
     def _get_video_orientation_from_file(self, file_path: str) -> str:
@@ -1473,7 +1607,7 @@ class VideoDownloader:
             self.log('warning', "opencv-python chưa được cài đặt, không thể lấy metadata từ file")
             return 'unknown'
         except Exception as e:
-            self.log('error', f"Lỗi khi lấy metadata từ file {file_path}: {e}")
+            self.log('error', f"Lỗi khi lấy metadata từ file {file_path}: {e}", exc_info=True)
             return 'unknown'
     
     def process_video(self, url: str, download_folder: str, naming_mode: str = "video_id", video_format: str = "auto", orientation_filter: str = "all") -> Dict:
@@ -1495,6 +1629,16 @@ class VideoDownloader:
                 'error': str
             }
         """
+        self.log('info', "=" * 60)
+        self.log('info', "VideoDownloader.process_video - Bắt đầu xử lý video")
+        self.log('info', f"  - URL: {url}")
+        # Đảm bảo download_folder là絶対パスで表示
+        download_folder_abs = os.path.abspath(download_folder)
+        self.log('info', f"  - Download folder: {download_folder_abs}")
+        self.log('info', f"  - Naming mode: {naming_mode}")
+        self.log('info', f"  - Video format: {video_format}")
+        self.log('info', f"  - Orientation filter: {orientation_filter}")
+        
         result = {
             'success': False,
             'video_id': None,
@@ -1510,7 +1654,7 @@ class VideoDownloader:
                 result['error'] = "URL không hợp lệ"
                 return result
             
-            print(f"URL sau khi normalize: {normalized_url}")
+            self.log('debug', f"URL sau khi normalize: {normalized_url}")
             
             # Bước 2: Lấy thông tin video
             self.log('info', f"Đang lấy thông tin video từ URL: {normalized_url}")
@@ -1585,6 +1729,8 @@ class VideoDownloader:
             
             # Tạo thư mục con theo tên người dùng
             user_folder = os.path.join(download_folder, safe_author)
+            # Đảm bảo thư mục là絶対パス
+            user_folder = os.path.abspath(user_folder)
             os.makedirs(user_folder, exist_ok=True)
             self.log('info', f"Lưu video vào thư mục: {user_folder}")
             
@@ -1593,10 +1739,25 @@ class VideoDownloader:
                 filename = f"{video_id}.mp4"
             else:
                 # Nếu không có video_id hoặc naming_mode là timestamp, dùng timestamp
-                timestamp = int(time.time())
+                # Sử dụng timestamp với microsecond để tránh trùng lặp
+                timestamp = int(time.time() * 1000000)  # Microsecond precision
                 filename = f"video_{timestamp}.mp4"
             
             file_path = os.path.join(user_folder, filename)
+            # Đảm bảo file_path là絶対パス
+            file_path = os.path.abspath(file_path)
+            
+            # Kiểm tra file đã tồn tại chưa, nếu có thì thêm số thứ tự
+            if os.path.exists(file_path):
+                base_name = filename.rsplit('.', 1)[0]  # Tên file không có extension
+                extension = filename.rsplit('.', 1)[1] if '.' in filename else 'mp4'
+                counter = 1
+                while os.path.exists(file_path):
+                    new_filename = f"{base_name}_{counter}.{extension}"
+                    file_path = os.path.join(user_folder, new_filename)
+                    file_path = os.path.abspath(file_path)
+                    counter += 1
+                self.log('info', f"File đã tồn tại, đổi tên thành: {os.path.basename(file_path)}")
             
             # Bước 5: Tải video
             success = self.download_video(video_url, file_path)
@@ -1612,7 +1773,7 @@ class VideoDownloader:
                             os.remove(file_path)
                             self.log('info', f"Đã xóa video {file_path} vì orientation ({actual_orientation}) không khớp với filter ({orientation_filter})")
                         except Exception as e:
-                            self.log('error', f"Không thể xóa file: {e}")
+                            self.log('error', f"Không thể xóa file: {e}", exc_info=True)
                         result['error'] = f"Video orientation ({actual_orientation}) không khớp với filter ({orientation_filter})"
                         result['success'] = False
                         return result
@@ -1629,8 +1790,24 @@ class VideoDownloader:
                 result['error'] = "Lỗi khi tải file"
             
         except Exception as e:
+            self.log('error', f"Exception trong process_video: {e}", exc_info=True)
             result['error'] = f"Lỗi: {str(e)}"
         
+        # Log kết quả cuối cùng
+        if result.get('success'):
+            self.log('info', f"process_video - Thành công")
+            self.log('info', f"  - Video ID: {result.get('video_id', 'N/A')}")
+            # Đảm bảo file_path là絶対パスで表示
+            file_path_log = result.get('file_path', 'N/A')
+            if file_path_log != 'N/A':
+                file_path_log = os.path.abspath(file_path_log)
+            self.log('info', f"  - File path: {file_path_log}")
+            self.log('info', f"  - Author: {result.get('author', 'N/A')}")
+        else:
+            self.log('warning', f"process_video - Thất bại")
+            self.log('warning', f"  - Error: {result.get('error', 'Unknown error')}")
+        
+        self.log('info', "=" * 60)
         return result
 
 

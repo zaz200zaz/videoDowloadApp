@@ -1,6 +1,14 @@
 """
 Main Entry Point
 Điểm chạy chính của ứng dụng Douyin Video Downloader
+
+Mục tiêu:
+- Khởi tạo và chạy ứng dụng Douyin Video Downloader
+- Thiết lập logging toàn cục
+- Quản lý vòng đời ứng dụng
+
+Input: Không có (entry point)
+Output: Ứng dụng GUI chạy cho đến khi người dùng đóng
 """
 
 import tkinter as tk
@@ -14,99 +22,168 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from models.cookie_manager import CookieManager
 from ui.main_window import MainWindow
+from utils.log_helper import write_log, get_logger
 
 
 def setup_global_logging():
-    """Thiết lập logging toàn cục cho ứng dụng"""
+    """
+    Thiết lập logging toàn cục cho ứng dụng
+    
+    Returns:
+        tuple: (logger, log_file_path) hoặc (None, None) nếu lỗi
+        
+    Exceptions:
+        Exception: Bất kỳ lỗi nào khi thiết lập logging
+    """
+    function_name = "setup_global_logging"
+    
     try:
-        # Tạo thư mục logs
+        # Tạo thư mục logs (theo System Instruction: tự động tạo thư mục logs/)
         script_dir = os.path.dirname(os.path.abspath(__file__))
         log_dir = os.path.join(script_dir, "logs")
         os.makedirs(log_dir, exist_ok=True)
         
-        # Xóa tất cả log file cũ khi khởi động app
+        # Xóa log file cũ (giữ lại 10 file gần nhất để debug)
         try:
             import glob
             log_files = glob.glob(os.path.join(log_dir, "*.log"))
-            deleted_count = 0
-            for log_file in log_files:
-                try:
-                    os.remove(log_file)
-                    deleted_count += 1
-                except Exception as e:
-                    print(f"[WARNING] Không thể xóa log file {log_file}: {e}")
-            if deleted_count > 0:
-                print(f"[INFO] Đã xóa {deleted_count} log file cũ")
+            if len(log_files) > 10:
+                # Sắp xếp theo thời gian sửa đổi (cũ nhất trước)
+                log_files.sort(key=lambda x: os.path.getmtime(x))
+                # Xóa các file cũ (giữ lại 10 file gần nhất)
+                files_to_delete = log_files[:-10]
+                deleted_count = 0
+                for log_file in files_to_delete:
+                    try:
+                        os.remove(log_file)
+                        deleted_count += 1
+                    except Exception as e:
+                        # Log warning nhưng không dừng quá trình
+                        temp_logger = get_logger('App')
+                        write_log('WARNING', function_name, 
+                                 f"Không thể xóa log file {log_file}: {e}", 
+                                 temp_logger, exc_info=True)
+                
+                if deleted_count > 0:
+                    temp_logger = get_logger('App')
+                    write_log('INFO', function_name, 
+                             f"Đã xóa {deleted_count} log file cũ (giữ lại 10 file gần nhất)", 
+                             temp_logger)
         except Exception as e:
-            print(f"[WARNING] Không thể xóa log file cũ: {e}")
+            # Log warning nhưng không dừng quá trình
+            temp_logger = get_logger('App')
+            write_log('WARNING', function_name, 
+                     f"Không thể xóa log file cũ: {e}", 
+                     temp_logger, exc_info=True)
         
         # Tạo file log với timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         log_file = os.path.join(log_dir, f"app_{timestamp}.log")
         
-        # Cấu hình logging
+        # Cấu hình logging theo System Instruction format
+        # Format: [timestamp] [LEVEL] [Function] Message
+        # Note: write_log() đã thêm [Function] vào message, nên formatter chỉ cần [timestamp] [LEVEL] message
         logging.basicConfig(
             level=logging.DEBUG,
-            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            format='[%(asctime)s] [%(levelname)s] %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S',
             handlers=[
                 logging.FileHandler(log_file, encoding='utf-8', mode='w'),
                 logging.StreamHandler()
-            ]
+            ],
+            force=True  # Force reload configuration
         )
         
-        logger = logging.getLogger('App')
-        logger.info("=" * 60)
-        logger.info("Douyin Video Downloader - Application Started")
-        logger.info(f"Log file: {log_file}")
-        logger.info("=" * 60)
+        # Tắt urllib3 DEBUG logs để giảm log file size (theo System Instruction)
+        # Phải thiết lập trước khi có bất kỳ request nào
+        logging.getLogger('urllib3').setLevel(logging.WARNING)
+        logging.getLogger('urllib3.connectionpool').setLevel(logging.WARNING)
+        
+        logger = get_logger('App')
+        write_log('INFO', function_name, "=" * 60, logger)
+        write_log('INFO', function_name, "Douyin Video Downloader - Application Started", logger)
+        write_log('INFO', function_name, f"Log file: {log_file}", logger)
+        write_log('INFO', function_name, "=" * 60, logger)
         
         return logger, log_file
+        
     except Exception as e:
+        # Log lỗi đầy đủ theo System Instruction
+        temp_logger = get_logger('App')
+        write_log('ERROR', function_name, 
+                 f"Không thể thiết lập logging: {e}", 
+                 temp_logger, exc_info=True)
         print(f"[ERROR] Không thể thiết lập logging: {e}")
         return None, None
 
 
 def main():
-    """Hàm main để khởi chạy ứng dụng"""
+    """
+    Hàm main để khởi chạy ứng dụng
+    
+    Flow:
+    1. Thiết lập logging
+    2. Khởi tạo root window
+    3. Khởi tạo CookieManager
+    4. Khởi tạo MainWindow
+    5. Chạy mainloop
+    
+    Exceptions:
+        KeyboardInterrupt: Người dùng dừng ứng dụng (Ctrl+C)
+        Exception: Bất kỳ lỗi nào khi khởi chạy ứng dụng
+    """
+    function_name = "main"
+    
+    # Bước 1: Thiết lập logging
     logger, log_file = setup_global_logging()
+    if logger:
+        write_log('INFO', function_name, "Bắt đầu khởi chạy ứng dụng", logger)
     
     try:
+        # Bước 2: Khởi tạo root window
         if logger:
-            logger.info("Đang khởi tạo ứng dụng...")
-        
-        # Khởi tạo root window
+            write_log('INFO', function_name, "Đang khởi tạo root window...", logger)
         root = tk.Tk()
         if logger:
-            logger.info("Root window đã được tạo")
+            write_log('INFO', function_name, "Root window đã được tạo thành công", logger)
         
-        # Khởi tạo các module
+        # Bước 3: Khởi tạo CookieManager
+        if logger:
+            write_log('INFO', function_name, "Đang khởi tạo CookieManager...", logger)
         cookie_manager = CookieManager()
         if logger:
-            logger.info("CookieManager đã được khởi tạo")
+            write_log('INFO', function_name, "CookieManager đã được khởi tạo thành công", logger)
         
-        # Khởi tạo main window
+        # Bước 4: Khởi tạo MainWindow
+        if logger:
+            write_log('INFO', function_name, "Đang khởi tạo MainWindow...", logger)
         app = MainWindow(root, cookie_manager, logger)
         if logger:
-            logger.info("MainWindow đã được khởi tạo")
-            logger.info("Ứng dụng sẵn sàng!")
+            write_log('INFO', function_name, "MainWindow đã được khởi tạo thành công", logger)
+            write_log('INFO', function_name, "Ứng dụng sẵn sàng!", logger)
         
-        # Chạy ứng dụng
+        # Bước 5: Chạy ứng dụng
         if logger:
-            logger.info("Bắt đầu mainloop...")
+            write_log('INFO', function_name, "Bắt đầu mainloop...", logger)
         root.mainloop()
         
         if logger:
-            logger.info("Ứng dụng đã được đóng")
+            write_log('INFO', function_name, "Ứng dụng đã được đóng bởi người dùng", logger)
         
     except KeyboardInterrupt:
+        # Người dùng dừng ứng dụng (Ctrl+C)
         if logger:
-            logger.warning("Ứng dụng đã được dừng bởi người dùng (Ctrl+C)")
+            write_log('WARNING', function_name, 
+                     "Ứng dụng đã được dừng bởi người dùng (Ctrl+C)", logger)
         print("\nỨng dụng đã được dừng bởi người dùng")
         sys.exit(0)
+        
     except Exception as e:
+        # Lỗi khi khởi chạy ứng dụng - log đầy đủ theo System Instruction
         if logger:
-            logger.error(f"Lỗi khi khởi chạy ứng dụng: {e}", exc_info=True)
+            write_log('ERROR', function_name, 
+                     f"Lỗi khi khởi chạy ứng dụng: {e}", 
+                     logger, exc_info=True)
         print(f"Lỗi khi khởi chạy ứng dụng: {e}")
         import traceback
         traceback.print_exc()

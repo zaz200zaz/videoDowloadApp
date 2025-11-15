@@ -40,8 +40,10 @@ def setup_logger(name: str, log_dir: Optional[str] = None) -> Tuple[logging.Logg
         # ファイルハンドラー
         file_handler = logging.FileHandler(log_file, encoding='utf-8', mode='w')
         file_handler.setLevel(logging.DEBUG)
+        # Format theo System Instruction: [timestamp] [LEVEL] [Function] Message
+        # Note: write_log() đã thêm [Function] vào message, nên formatter chỉ cần [timestamp] [LEVEL] message
         file_format = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            '[%(asctime)s] [%(levelname)s] %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
         )
         file_handler.setFormatter(file_format)
@@ -50,9 +52,14 @@ def setup_logger(name: str, log_dir: Optional[str] = None) -> Tuple[logging.Logg
         # コンソールハンドラー
         console_handler = logging.StreamHandler()
         console_handler.setLevel(logging.INFO)
-        console_format = logging.Formatter('%(levelname)s - %(message)s')
+        # Console format cũng theo System Instruction
+        console_format = logging.Formatter('[%(levelname)s] %(message)s')
         console_handler.setFormatter(console_format)
         logger.addHandler(console_handler)
+        
+        # Tắt urllib3 DEBUG logs (theo System Instruction)
+        logging.getLogger('urllib3').setLevel(logging.WARNING)
+        logging.getLogger('urllib3.connectionpool').setLevel(logging.WARNING)
         
         logger.info(f"Logger initialized. Log file: {log_file}")
         return logger, log_file
