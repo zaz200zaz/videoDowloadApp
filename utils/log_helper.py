@@ -163,3 +163,4 @@ def log_function_end(logger: logging.Logger, function: str, success: bool = True
     level = 'INFO' if success else 'ERROR'
     write_log(level, function, message, logger)
 
+

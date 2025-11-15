@@ -74,6 +74,9 @@ class VideoDownloader:
             self.logger = logging.getLogger('VideoDownloader')
             self.logger.setLevel(logging.DEBUG)
             
+            # Ngăn chặn propagate đến root logger để đảm bảo format nhất quán (theo System Instruction 4.2)
+            self.logger.propagate = False
+            
             # Xóa các handler cũ
             self.logger.handlers = []
             
@@ -181,10 +184,11 @@ class VideoDownloader:
         self.session.headers.update(headers)
         
         # Debug: kiểm tra cookie có được set đúng không
+        function_name = "VideoDownloader._setup_session"
         if len(clean_cookie) > 0:
-            self.log('info', f"Cookie đã được set (length: {len(clean_cookie)})")
+            self.log('info', f"Cookie đã được set (length: {len(clean_cookie)})", function_name)
         else:
-            self.log('warning', "WARNING: Cookie rỗng!")
+            self.log('warning', "WARNING: Cookie rỗng!", function_name)
     
     def normalize_url(self, url: str) -> Optional[str]:
         """
@@ -461,14 +465,14 @@ class VideoDownloader:
                 orientation = 'unknown'
                 if width > 0 and height > 0:
                     # Log để debug
-                    self.log('info', f"Video {video_id}: width={width}, height={height}, ratio={height/width if width > 0 else 0:.2f}")
+                    self.log('info', f"Video {video_id}: width={width}, height={height}, ratio={height/width if width > 0 else 0:.2f}", function_name)
                     if height > width:
                         orientation = 'vertical'  # 縦向き (dọc)
                     elif width > height:
                         orientation = 'horizontal'  # 横向き (ngang)
                     else:
                         orientation = 'square'  # 正方形
-                    self.log('info', f"Video {video_id}: orientation={orientation} (width={width}, height={height})")
+                    self.log('info', f"Video {video_id}: orientation={orientation} (width={width}, height={height})", function_name)
                 
                 video_info = {
                     'video_id': video_id,
@@ -558,14 +562,14 @@ class VideoDownloader:
                     orientation = 'unknown'
                     if width > 0 and height > 0:
                         # Log để debug
-                        self.log('info', f"Video (aweme_list): width={width}, height={height}, ratio={height/width if width > 0 else 0:.2f}")
+                        self.log('info', f"Video (aweme_list): width={width}, height={height}, ratio={height/width if width > 0 else 0:.2f}", function_name)
                         if height > width:
                             orientation = 'vertical'  # 縦向き (dọc)
                         elif width > height:
                             orientation = 'horizontal'  # 横向き (ngang)
                         else:
                             orientation = 'square'  # 正方形
-                        self.log('info', f"Video (aweme_list): orientation={orientation} (width={width}, height={height})")
+                        self.log('info', f"Video (aweme_list): orientation={orientation} (width={width}, height={height})", function_name)
                     
                     video_info = {
                         'video_id': video_id,
@@ -611,20 +615,20 @@ class VideoDownloader:
                             all_urls.sort(key=lambda x: x.get('quality', 0), reverse=True)
                             video_info['video_urls'] = all_urls
                             video_info['video_url'] = all_urls[0]['url']
-                            self.log('info', f"Đã tìm thấy {len(all_urls)} video URL từ aweme_list")
+                            self.log('info', f"Đã tìm thấy {len(all_urls)} video URL từ aweme_list", function_name)
                             return video_info
                     
                     return None
             else:
-                self.log('warning', f"Response không chứa 'aweme_detail' hoặc 'aweme_list'. Keys: {data.keys() if isinstance(data, dict) else 'Not a dict'}")
+                self.log('warning', f"Response không chứa 'aweme_detail' hoặc 'aweme_list'. Keys: {data.keys() if isinstance(data, dict) else 'Not a dict'}", function_name)
                 # Thử lấy từ HTML
                 return self._get_video_info_from_html(url, video_id)
             
         except requests.exceptions.RequestException as e:
-            self.log('error', f"Lỗi khi lấy thông tin video: {e}", exc_info=True)
+            self.log('error', f"Lỗi khi lấy thông tin video: {e}", function_name, exc_info=True)
             return None
         except Exception as e:
-            self.log('error', f"Lỗi không xác định khi lấy thông tin video: {e}", exc_info=True)
+            self.log('error', f"Lỗi không xác định khi lấy thông tin video: {e}", function_name, exc_info=True)
             return None
     
     def _get_video_info_from_html(self, url: str, video_id: str) -> Optional[Dict]:
@@ -714,7 +718,7 @@ class VideoDownloader:
             # Nếu vẫn chưa tìm thấy, thử tìm trực tiếp trong HTML
             if not video_url:
                 # Trước tiên, thử tìm trong RENDER_DATA hoặc window data
-                self.log('info', "Đang tìm kiếm trong RENDER_DATA và window data...")
+                self.log('info', "Đang tìm kiếm trong RENDER_DATA và window data...", function_name)
                 render_data_patterns = [
                     r'<script[^>]*id="RENDER_DATA"[^>]*>(.+?)</script>',
                     r'window\._UNIVERSAL_DATA\s*=\s*({.+?});',
@@ -1059,6 +1063,7 @@ class VideoDownloader:
     
     def _extract_video_url_from_json(self, data: dict, video_id: str = None, depth: int = 0, max_depth: int = 10) -> Optional[str]:
         """Recursively tìm video URL trong JSON data"""
+        function_name = "VideoDownloader._extract_video_url_from_json"
         # 深さ制限を追加（無限ループを防ぐ）
         if depth > max_depth:
             return None
@@ -1099,12 +1104,12 @@ class VideoDownloader:
                 if key in data:
                     value = data[key]
                     if isinstance(value, str) and is_valid_video_url(value):
-                        self.log('debug', f"Tìm thấy video URL trong key '{key}' (depth {depth})")
+                        self.log('debug', f"Tìm thấy video URL trong key '{key}' (depth {depth})", function_name)
                         return value
                     elif isinstance(value, list) and len(value) > 0:
                         for item in value:
                             if isinstance(item, str) and is_valid_video_url(item):
-                                self.log('debug', f"Tìm thấy video URL trong key '{key}' list (depth {depth})")
+                                self.log('debug', f"Tìm thấy video URL trong key '{key}' list (depth {depth})", function_name)
                                 return item
                     elif isinstance(value, dict):
                         result = self._extract_video_url_from_json(value, video_id, depth + 1, max_depth)
@@ -1119,7 +1124,7 @@ class VideoDownloader:
                     if isinstance(video_data, dict):
                         result = self._extract_video_url_from_json(video_data, video_id, depth + 1, max_depth)
                         if result:
-                            self.log('debug', f"Tìm thấy video URL trong '{video_key}' (depth {depth})")
+                            self.log('debug', f"Tìm thấy video URL trong '{video_key}' (depth {depth})", function_name)
                             return result
                     elif isinstance(video_data, list) and len(video_data) > 0:
                         for item in video_data:
@@ -1134,7 +1139,7 @@ class VideoDownloader:
                 if isinstance(app_data, dict):
                     result = self._extract_video_url_from_json(app_data, video_id, depth + 1, max_depth)
                     if result:
-                        self.log('debug', f"Tìm thấy video URL trong 'app' (depth {depth})")
+                        self.log('debug', f"Tìm thấy video URL trong 'app' (depth {depth})", function_name)
                         return result
             
             # Recursive search trong các giá trị khác
@@ -1168,6 +1173,7 @@ class VideoDownloader:
         Returns:
             Dict chứa thông tin video hoặc None nếu lỗi
         """
+        function_name = "VideoDownloader._get_video_info_from_tikvideo"
         try:
             # TikVideo.AppのAPIエンドポイントを試す
             # 一般的なパターン: /api/download, /api/video, /api/parse など
@@ -1180,7 +1186,7 @@ class VideoDownloader:
             
             for api_url in api_endpoints:
                 try:
-                    self.log('debug', f"Thử gọi TikVideo API: {api_url}")
+                    self.log('debug', f"Thử gọi TikVideo API: {api_url}", function_name)
                     
                     # POSTリクエストでURLを送信
                     headers = {
@@ -1207,12 +1213,12 @@ class VideoDownloader:
                             )
                             
                             # Log API call theo System Instruction
-                            self.log('debug', f"TikVideo API response status: {response.status_code}")
+                            self.log('debug', f"TikVideo API response status: {response.status_code}", function_name)
                             
                             if response.status_code == 200:
                                 try:
                                     data = response.json()
-                                    self.log('debug', f"TikVideo API response keys: {data.keys() if isinstance(data, dict) else 'Not a dict'}")
+                                    self.log('debug', f"TikVideo API response keys: {data.keys() if isinstance(data, dict) else 'Not a dict'}", function_name)
                                     
                                     # レスポンス構造に応じてビデオURLを抽出
                                     video_url = None
@@ -1251,7 +1257,7 @@ class VideoDownloader:
                                                         break
                                     
                                     if video_url:
-                                        self.log('info', f"Tìm thấy video URL từ TikVideo API: {video_url[:150]}...")
+                                        self.log('info', f"Tìm thấy video URL từ TikVideo API: {video_url[:150]}...", function_name)
                                         return {
                                             'video_id': self.extract_video_id(url) or '',
                                             'title': data.get('title', data.get('desc', '')),
@@ -1266,7 +1272,7 @@ class VideoDownloader:
                                     if video_url_match:
                                         video_url = video_url_match.group(0)
                                         if 'douyin_pc_client' not in video_url.lower():
-                                            self.log('info', f"Tìm thấy video URL từ TikVideo HTML: {video_url[:150]}...")
+                                            self.log('info', f"Tìm thấy video URL từ TikVideo HTML: {video_url[:150]}...", function_name)
                                             return {
                                                 'video_id': self.extract_video_id(url) or '',
                                                 'title': '',
@@ -1275,18 +1281,18 @@ class VideoDownloader:
                                             }
                                     
                         except Exception as e:
-                            self.log('error', f"Lỗi khi gọi TikVideo API {api_url} với payload {payload}: {e}", exc_info=True)
+                            self.log('error', f"Lỗi khi gọi TikVideo API {api_url} với payload {payload}: {e}", function_name, exc_info=True)
                             continue
                     
                 except Exception as e:
-                    self.log('error', f"Lỗi khi kết nối TikVideo API {api_url}: {e}", exc_info=True)
+                    self.log('error', f"Lỗi khi kết nối TikVideo API {api_url}: {e}", function_name, exc_info=True)
                     continue
             
-            self.log('warning', "Không thể lấy thông tin từ TikVideo.App API")
+            self.log('warning', "Không thể lấy thông tin từ TikVideo.App API", function_name)
             return None
             
         except Exception as e:
-            self.log('error', f"Lỗi khi gọi TikVideo API: {e}", exc_info=True)
+            self.log('error', f"Lỗi khi gọi TikVideo API: {e}", function_name, exc_info=True)
             return None
     
     def get_all_videos_from_user(self, user_url: str, progress_callback=None) -> List[str]:
@@ -1300,20 +1306,21 @@ class VideoDownloader:
         Returns:
             List các video URL
         """
+        function_name = "VideoDownloader.get_all_videos_from_user"
         video_urls = []
         
         try:
             # Extract sec_user_id từ URL (sử dụng compiled regex - tối ưu hiệu suất)
             match = self._regex_patterns['user_id_pattern'].search(user_url)
             if not match:
-                self.log('error', f"Không thể trích xuất user ID từ URL: {user_url}")
+                self.log('error', f"Không thể trích xuất user ID từ URL: {user_url}", function_name)
                 if progress_callback:
                     progress_callback(0, 0, f"Không thể trích xuất user ID từ URL: {user_url}")
                 return []
             
             sec_user_id = match.group(1)
-            self.log('info', f"User ID extracted: {sec_user_id}")
-            self.log('debug', f"User ID: {sec_user_id}")
+            self.log('info', f"User ID extracted: {sec_user_id}", function_name)
+            self.log('debug', f"User ID: {sec_user_id}", function_name)
             
             if progress_callback:
                 progress_callback(0, 0, f"Đang kết nối với user ID: {sec_user_id}...")
@@ -1396,17 +1403,17 @@ class VideoDownloader:
                             orientation = 'unknown'
                             if width > 0 and height > 0:
                                 # Log để debug
-                                self.log('info', f"Video {aweme_id} (get_all_videos_from_user): width={width}, height={height}, ratio={height/width if width > 0 else 0:.2f}")
+                                self.log('info', f"Video {aweme_id} (get_all_videos_from_user): width={width}, height={height}, ratio={height/width if width > 0 else 0:.2f}", function_name)
                                 if height > width:
                                     orientation = 'vertical'  # 縦向き (dọc)
                                 elif width > height:
                                     orientation = 'horizontal'  # 横向き (ngang)
                                 else:
                                     orientation = 'square'  # 正方形
-                                self.log('info', f"Video {aweme_id} (get_all_videos_from_user): orientation={orientation} (width={width}, height={height})")
+                                self.log('info', f"Video {aweme_id} (get_all_videos_from_user): orientation={orientation} (width={width}, height={height})", function_name)
                             
                             # Log thông tin video để debug
-                            self.log('info', f"Video {len(video_urls)+1}: aweme_id={aweme_id}, orientation={orientation} ({width}x{height}), author={author_nickname} (@{author_unique_id}), desc={desc}")
+                            self.log('info', f"Video {len(video_urls)+1}: aweme_id={aweme_id}, orientation={orientation} ({width}x{height}), author={author_nickname} (@{author_unique_id}), desc={desc}", function_name)
                             
                             # Thử lấy direct video URL trước (giống như douyin-video-links1.txt)
                             video_url = None
@@ -1490,32 +1497,33 @@ class VideoDownloader:
         Returns:
             Video URL được chọn hoặc None
         """
+        function_name = "VideoDownloader._select_video_url"
         # Nếu có nhiều URL (video_urls), chọn dựa trên format
         if 'video_urls' in video_info and video_info['video_urls']:
             all_urls = video_info['video_urls']
-            self.log('info', f"Tìm thấy {len(all_urls)} định dạng video có sẵn")
+            self.log('info', f"Tìm thấy {len(all_urls)} định dạng video có sẵn", function_name)
             
             if video_format == "auto" or video_format == "highest":
                 # Chọn chất lượng cao nhất (đã được sắp xếp)
                 selected = all_urls[0]
-                self.log('info', f"Chọn định dạng: {video_format}, Quality: {selected.get('quality', 'N/A')}")
+                self.log('info', f"Chọn định dạng: {video_format}, Quality: {selected.get('quality', 'N/A')}", function_name)
                 return selected['url']
             elif video_format == "high":
                 # Chọn 1/4 đầu (chất lượng cao)
                 idx = max(0, len(all_urls) // 4)
                 selected = all_urls[idx]
-                self.log('info', f"Chọn định dạng: {video_format}, Quality: {selected.get('quality', 'N/A')}")
+                self.log('info', f"Chọn định dạng: {video_format}, Quality: {selected.get('quality', 'N/A')}", function_name)
                 return selected['url']
             elif video_format == "medium":
                 # Chọn giữa (chất lượng trung bình)
                 idx = len(all_urls) // 2
                 selected = all_urls[idx]
-                self.log('info', f"Chọn định dạng: {video_format}, Quality: {selected.get('quality', 'N/A')}")
+                self.log('info', f"Chọn định dạng: {video_format}, Quality: {selected.get('quality', 'N/A')}", function_name)
                 return selected['url']
             elif video_format == "low":
                 # Chọn cuối (chất lượng thấp)
                 selected = all_urls[-1]
-                self.log('info', f"Chọn định dạng: {video_format}, Quality: {selected.get('quality', 'N/A')}")
+                self.log('info', f"Chọn định dạng: {video_format}, Quality: {selected.get('quality', 'N/A')}", function_name)
                 return selected['url']
             else:
                 # Mặc định chọn đầu tiên
@@ -1569,12 +1577,12 @@ class VideoDownloader:
             }
         
         # Log cài đặt timeout
-        self.log('info', "=" * 60)
-        self.log('info', f"{function_name} - Bắt đầu")
-        self.log('info', f"  - Video URL: {video_url[:100]}...")
+        self.log('info', "=" * 60, function_name)
+        self.log('info', f"{function_name} - Bắt đầu", function_name)
+        self.log('info', f"  - Video URL: {video_url[:100]}...", function_name)
         save_path_abs = os.path.abspath(save_path)
-        self.log('info', f"  - Save path: {save_path_abs}")
-        self.log('debug', f"  - Timeout settings: {timeout_settings}")
+        self.log('info', f"  - Save path: {save_path_abs}", function_name)
+        self.log('debug', f"  - Timeout settings: {timeout_settings}", function_name)
         
         # Gọi download_video_with_retry để xử lý retry logic
         return self.download_video_with_retry(
@@ -1608,22 +1616,24 @@ class VideoDownloader:
         
         if retry_count > 0:
             retry_delay = timeout_settings.get('retry_delay_seconds', 5)
-            self.log('info', f"Retry lần {retry_count}/{max_retries} sau {retry_delay} giây...")
+            self.log('info', f"Retry lần {retry_count}/{max_retries} sau {retry_delay} giây...", function_name)
             import time
             time.sleep(retry_delay)
         
-        # Ghi lại thời gian bắt đầu
+        # Ghi lại thời gian bắt đầu (theo System Instruction 4.4 - log bắt đầu)
         import time
         start_time = time.time()
+        self.log('debug', f"Bắt đầu tải video (retry {retry_count}/{max_retries})", function_name)
         
-        # Đảm bảo save_path là絶対パス
+        # Đảm bảo save_path là絶対パス (theo System Instruction 8)
         save_path_abs = os.path.abspath(save_path)
+        self.log('debug', f"Save path (absolute): {save_path_abs}", function_name)
         
         try:
-            # Kiểm tra thư mục
+            # Kiểm tra thư mục (theo System Instruction 8 - tự động tạo thư mục)
             save_dir = os.path.dirname(save_path)
             if not os.path.exists(save_dir):
-                self.log('info', f"Thư mục không tồn tại, đang tạo: {save_dir}")
+                self.log('info', f"Thư mục không tồn tại, đang tạo: {save_dir}", function_name)
                 os.makedirs(save_dir, exist_ok=True)
             
             # Kiểm tra timeout tổng trước khi bắt đầu
@@ -1631,23 +1641,27 @@ class VideoDownloader:
             enable_skip_slow = timeout_settings.get('enable_skip_slow_videos', True)
             
             if enable_skip_slow and max_download_time > 0:
-                self.log('debug', f"Max download time: {max_download_time} giây ({max_download_time/60:.1f} phút)")
+                self.log('debug', f"Max download time: {max_download_time} giây ({max_download_time/60:.1f} phút)", function_name)
             
-            self.log('info', "Đang gửi request để tải video...")
+            # Log API call theo System Instruction 4.4 - log request + status code
+            self.log('info', f"Đang gửi request để tải video: {video_url[:100]}...", function_name)
             download_timeout = timeout_settings.get('download_timeout_seconds', 300)
             response = self.session.get(video_url, stream=True, timeout=download_timeout)
             response.raise_for_status()
             
-            # Lấy thông tin về file size nếu có
+            # Log API response theo System Instruction 4.4
+            self.log('debug', f"Response status: {response.status_code}", function_name)
+            
+            # Lấy thông tin về file size nếu có (theo System Instruction 4.3 - DEBUG cho output)
             content_length = response.headers.get('Content-Length')
             if content_length:
                 file_size = int(content_length)
-                self.log('info', f"File size: {file_size} bytes ({file_size / 1024 / 1024:.2f} MB)")
+                self.log('info', f"File size: {file_size} bytes ({file_size / 1024 / 1024:.2f} MB)", function_name)
             else:
-                self.log('warning', "Không thể lấy file size từ header")
+                self.log('warning', "Không thể lấy file size từ header", function_name)
                 file_size = None
             
-            self.log('info', "Đang tải file...")
+            self.log('info', "Đang tải file...", function_name)
             downloaded_size = 0
             chunk_count = 0
             
@@ -1907,11 +1921,12 @@ class VideoDownloader:
         Returns:
             'vertical', 'horizontal', 'square', または 'unknown'
         """
+        function_name = "VideoDownloader._get_video_orientation_from_file"
         try:
             import cv2
             cap = cv2.VideoCapture(file_path)
             if not cap.isOpened():
-                self.log('warning', f"Không thể mở video file: {file_path}")
+                self.log('warning', f"Không thể mở video file: {file_path}", function_name)
                 return 'unknown'
             
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -1920,22 +1935,22 @@ class VideoDownloader:
             
             if width > 0 and height > 0:
                 # Log để debug
-                self.log('info', f"Video file {file_path}: width={width}, height={height}, ratio={height/width if width > 0 else 0:.2f}")
+                self.log('info', f"Video file {file_path}: width={width}, height={height}, ratio={height/width if width > 0 else 0:.2f}", function_name)
                 if height > width:
                     orientation = 'vertical'  # 縦向き (dọc)
                 elif width > height:
                     orientation = 'horizontal'  # 横向き (ngang)
                 else:
                     orientation = 'square'  # 正方形
-                self.log('info', f"Video file {file_path}: orientation={orientation} (width={width}, height={height})")
+                self.log('info', f"Video file {file_path}: orientation={orientation} (width={width}, height={height})", function_name)
                 return orientation
             else:
                 return 'unknown'
         except ImportError:
-            self.log('warning', "opencv-python chưa được cài đặt, không thể lấy metadata từ file")
+            self.log('warning', "opencv-python chưa được cài đặt, không thể lấy metadata từ file", function_name)
             return 'unknown'
         except Exception as e:
-            self.log('error', f"Lỗi khi lấy metadata từ file {file_path}: {e}", exc_info=True)
+            self.log('error', f"Lỗi khi lấy metadata từ file {file_path}: {e}", function_name, exc_info=True)
             return 'unknown'
     
     def process_video(self, url: str, download_folder: str, naming_mode: str = "video_id", video_format: str = "auto", orientation_filter: str = "all", timeout_settings: dict = None) -> Dict:
@@ -1957,15 +1972,16 @@ class VideoDownloader:
                 'error': str
             }
         """
-        self.log('info', "=" * 60)
-        self.log('info', "VideoDownloader.process_video - Bắt đầu xử lý video")
-        self.log('info', f"  - URL: {url}")
+        function_name = "VideoDownloader.process_video"
+        self.log('info', "=" * 60, function_name)
+        self.log('info', "VideoDownloader.process_video - Bắt đầu xử lý video", function_name)
+        self.log('info', f"  - URL: {url}", function_name)
         # Đảm bảo download_folder là絶対パスで表示
         download_folder_abs = os.path.abspath(download_folder)
-        self.log('info', f"  - Download folder: {download_folder_abs}")
-        self.log('info', f"  - Naming mode: {naming_mode}")
-        self.log('info', f"  - Video format: {video_format}")
-        self.log('info', f"  - Orientation filter: {orientation_filter}")
+        self.log('info', f"  - Download folder: {download_folder_abs}", function_name)
+        self.log('info', f"  - Naming mode: {naming_mode}", function_name)
+        self.log('info', f"  - Video format: {video_format}", function_name)
+        self.log('info', f"  - Orientation filter: {orientation_filter}", function_name)
         
         result = {
             'success': False,
@@ -1991,17 +2007,22 @@ class VideoDownloader:
             normalized_url = self.normalize_url(url)
             if not normalized_url:
                 result['error'] = "URL không hợp lệ"
+                self.log('warning', "URL không hợp lệ sau khi normalize", function_name)
+                self.log('info', "Process video hoàn thành - URL không hợp lệ", function_name)
                 return result
             
-            self.log('debug', f"URL sau khi normalize: {normalized_url}")
+            self.log('debug', f"URL sau khi normalize: {normalized_url[:100]}...", function_name)
             
             # Bước 2: Lấy thông tin video
-            self.log('info', f"Đang lấy thông tin video từ URL: {normalized_url}")
+            self.log('info', f"Đang lấy thông tin video từ URL: {normalized_url[:100]}...", function_name)
             video_info = self.get_video_info(normalized_url)
             if not video_info:
                 # Nếu normalizeされたURLが短縮URLと異なる場合、既に解決済みなので
                 # URL gốcに戻す必要はない（URL gốcは短縮URLなので）
-                result['error'] = "Không thể lấy thông tin video. Có thể:\n1. Cookie không hợp lệ hoặc đã hết hạn\n2. Video không tồn tại hoặc bị chặn\n3. API Douyin đã thay đổi\n\nVui lòng kiểm tra lại cookie và thử lại."
+                error_msg = "Không thể lấy thông tin video. Có thể:\n1. Cookie không hợp lệ hoặc đã hết hạn\n2. Video không tồn tại hoặc bị chặn\n3. API Douyin đã thay đổi\n\nVui lòng kiểm tra lại cookie và thử lại."
+                result['error'] = error_msg
+                self.log('error', error_msg, function_name)
+                self.log('info', "Process video hoàn thành - không thể lấy thông tin video", function_name)
                 return result
             
             video_id = video_info.get('video_id')
@@ -2024,9 +2045,9 @@ class VideoDownloader:
             else:
                 orientation_detailed = "unknown"
             
-            # Log thông tin video để debug (cải thiện)
-            self.log('info', f"Video info retrieved - video_id={video_id}, author={author}, orientation={orientation} ({orientation_detailed}), size={width}x{height}, aspect_ratio={aspect_ratio:.2f}, title={title[:50] if title else 'N/A'}")
-            self.log('debug', f"Video info keys: {list(video_info.keys())}")
+            # Log thông tin video để debug (theo System Instruction 4.3 - DEBUG cho input/output)
+            self.log('debug', f"Video info retrieved - video_id={video_id}, author={author}, orientation={orientation} ({orientation_detailed}), size={width}x{height}, aspect_ratio={aspect_ratio:.2f}, title={title[:50] if title else 'N/A'}", function_name)
+            self.log('debug', f"Video info keys: {list(video_info.keys())}", function_name)
             
             # Kiểm tra orientation filter (cải thiện logging)
             # 直接ビデオURLの場合、orientationはunknownになるが、ダウンロード後に判定する
@@ -2035,14 +2056,14 @@ class VideoDownloader:
                                   video_info.get('title') == 'Direct Video')
             
             if orientation_filter != "all":
-                # Log filter đang được áp dụng (mới)
+                # Log filter đang được áp dụng (theo System Instruction 4.4 - log các bước chính)
                 filter_name_map = {
                     "horizontal": "Landscape (ngang)",
                     "vertical": "Portrait (dọc)",
                     "all": "Tất cả"
                 }
                 filter_display_name = filter_name_map.get(orientation_filter, orientation_filter)
-                self.log('info', f"Đang áp dụng orientation filter: {filter_display_name}")
+                self.log('info', f"Đang áp dụng orientation filter: {filter_display_name}", function_name)
                 
                 if orientation != "unknown":
                     # APIから取得したorientationがある場合、ここでフィルタを適用
@@ -2050,40 +2071,46 @@ class VideoDownloader:
                     if width > 0 and height > 0:
                         calculated_orientation = "horizontal" if width > height else ("vertical" if height > width else "square")
                         if calculated_orientation != orientation and orientation != "square":
-                            self.log('debug', f"Orientation từ API ({orientation}) không khớp với tính toán ({calculated_orientation}), sử dụng orientation từ API")
+                            self.log('debug', f"Orientation từ API ({orientation}) không khớp với tính toán ({calculated_orientation}), sử dụng orientation từ API", function_name)
                     
                     if orientation != orientation_filter:
                         result['error'] = f"Video orientation ({orientation} - {orientation_detailed}) không khớp với filter ({orientation_filter} - {filter_display_name})"
-                        result['filtered_by_orientation'] = True  # Đánh dấu là bị filter (mới)
-                        # Log chi tiết về lý do filter (mới)
-                        self.log('info', f"Bỏ qua video {video_id} - Lý do: orientation không khớp")
-                        self.log('info', f"  - Video orientation: {orientation} ({orientation_detailed})")
-                        self.log('info', f"  - Video size: {width}x{height} (aspect ratio: {aspect_ratio:.2f})")
-                        self.log('info', f"  - Filter yêu cầu: {orientation_filter} ({filter_display_name})")
-                        self.log('info', f"  - Video ID: {video_id}")
-                        self.log('info', f"  - Author: {author}")
-                        self.log('info', f"  - Title: {title[:100] if title else 'N/A'}")
+                        result['filtered_by_orientation'] = True  # Đánh dấu là bị filter
+                        # Log chi tiết về lý do filter (theo System Instruction 4.3 - WARNING cho cảnh báo)
+                        self.log('warning', f"Bỏ qua video {video_id} - Lý do: orientation không khớp", function_name)
+                        self.log('debug', f"  - Video orientation: {orientation} ({orientation_detailed})", function_name)
+                        self.log('debug', f"  - Video size: {width}x{height} (aspect ratio: {aspect_ratio:.2f})", function_name)
+                        self.log('debug', f"  - Filter yêu cầu: {orientation_filter} ({filter_display_name})", function_name)
+                        self.log('debug', f"  - Video ID: {video_id}", function_name)
+                        self.log('debug', f"  - Author: {author}", function_name)
+                        self.log('debug', f"  - Title: {title[:100] if title else 'N/A'}", function_name)
+                        self.log('info', "Process video hoàn thành - bị filter bởi orientation", function_name)
                         return result
                     else:
-                        self.log('info', f"Video {video_id} phù hợp với orientation filter: {orientation_filter} ({filter_display_name})")
-                        self.log('debug', f"  - Video size: {width}x{height} (aspect ratio: {aspect_ratio:.2f})")
+                        self.log('debug', f"Video {video_id} phù hợp với orientation filter: {orientation_filter} ({filter_display_name})", function_name)
+                        self.log('debug', f"  - Video size: {width}x{height} (aspect ratio: {aspect_ratio:.2f})", function_name)
                 elif is_direct_video_url:
                     # 直接ビデオURLの場合、ダウンロード後に判定する
-                    self.log('info', f"Video {video_id} là direct video URL, sẽ kiểm tra orientation sau khi tải (filter: {filter_display_name})")
+                    self.log('info', f"Video {video_id} là direct video URL, sẽ kiểm tra orientation sau khi tải (filter: {filter_display_name})", function_name)
                 else:
                     # orientationがunknownで、直接ビデオURLでもない場合
-                    self.log('warning', f"Video {video_id} có orientation=unknown, không thể áp dụng filter ({filter_display_name})")
-                    self.log('warning', f"  - Video size: {width}x{height} (aspect ratio: {aspect_ratio:.2f})")
+                    self.log('warning', f"Video {video_id} có orientation=unknown, không thể áp dụng filter ({filter_display_name})", function_name)
+                    self.log('debug', f"  - Video size: {width}x{height} (aspect ratio: {aspect_ratio:.2f})", function_name)
             else:
-                # Không có filter, log để debug (mới)
-                self.log('debug', f"Không có orientation filter, tải tất cả video (orientation: {orientation}, size: {width}x{height})")
+                # Không có filter, log để debug (theo System Instruction 4.3 - DEBUG cho input/output)
+                self.log('debug', f"Không có orientation filter, tải tất cả video (orientation: {orientation}, size: {width}x{height})", function_name)
             
             # Chọn video URL dựa trên format được chọn
+            self.log('debug', f"Đang chọn video URL với format: {video_format}", function_name)
             video_url = self._select_video_url(video_info, video_format)
             
             if not video_url:
                 result['error'] = "Không tìm thấy link video"
+                self.log('error', "Không tìm thấy link video", function_name)
+                self.log('info', "Process video hoàn thành - không tìm thấy link video", function_name)
                 return result
+            
+            self.log('debug', f"Đã chọn video URL: {video_url[:100]}...", function_name)
             
             result['video_id'] = video_id
             result['author'] = author
@@ -2098,7 +2125,7 @@ class VideoDownloader:
                                                       orientation_filter != "all")
             
             if needs_orientation_check_after_download:
-                self.log('info', f"Video là direct URL, sẽ kiểm tra orientation sau khi tải (filter: {orientation_filter})")
+                self.log('info', f"Video là direct URL, sẽ kiểm tra orientation sau khi tải (filter: {orientation_filter})", function_name)
             
             # Bước 4: Tạo thư mục theo tên người dùng
             # Làm sạch tên người dùng (loại bỏ ký tự không hợp lệ cho tên thư mục)
@@ -2107,12 +2134,12 @@ class VideoDownloader:
             if not safe_author or safe_author == '':
                 safe_author = 'Unknown'
             
-            # Tạo thư mục con theo tên người dùng
+            # Tạo thư mục con theo tên người dùng (theo System Instruction 8 - tự động tạo thư mục)
             user_folder = os.path.join(download_folder, safe_author)
-            # Đảm bảo thư mục là絶対パス
+            # Đảm bảo thư mục là絶対パス (theo System Instruction 8)
             user_folder = os.path.abspath(user_folder)
             os.makedirs(user_folder, exist_ok=True)
-            self.log('info', f"Lưu video vào thư mục: {user_folder}")
+            self.log('info', f"Lưu video vào thư mục: {user_folder}", function_name)
             
             # Bước 4: Tạo tên file
             if naming_mode == "video_id" and video_id:
@@ -2137,7 +2164,7 @@ class VideoDownloader:
                     file_path = os.path.join(user_folder, new_filename)
                     file_path = os.path.abspath(file_path)
                     counter += 1
-                self.log('info', f"File đã tồn tại, đổi tên thành: {os.path.basename(file_path)}")
+                self.log('info', f"File đã tồn tại, đổi tên thành: {os.path.basename(file_path)}", function_name)
             
             # Bước 5: Tải video với timeout settings
             # Sử dụng timeout_settings từ parameter, hoặc lấy từ config nếu không có
@@ -2155,9 +2182,9 @@ class VideoDownloader:
                     'enable_skip_slow_videos': True,
                     'chunk_size': 8192
                 }
-                self.log('debug', f"Sử dụng timeout settings mặc định: {timeout_settings}")
+                self.log('debug', f"Sử dụng timeout settings mặc định: {timeout_settings}", function_name)
             
-            self.log('info', f"Bắt đầu tải video với timeout settings: enable_timeout_detection={timeout_settings.get('enable_timeout_detection')}, enable_auto_retry={timeout_settings.get('enable_auto_retry')}, enable_skip_slow_videos={timeout_settings.get('enable_skip_slow_videos')}")
+            self.log('info', f"Bắt đầu tải video với timeout settings: enable_timeout_detection={timeout_settings.get('enable_timeout_detection')}, enable_auto_retry={timeout_settings.get('enable_auto_retry')}, enable_skip_slow_videos={timeout_settings.get('enable_skip_slow_videos')}", function_name)
             
             # Tải video với retry logic và timeout detection
             download_result = self.download_video(video_url, file_path, timeout_settings)
@@ -2174,16 +2201,17 @@ class VideoDownloader:
                 error_msg = download_result.get('error', 'Unknown error')
                 result['error'] = error_msg
                 
-                # Log chi tiết về lỗi
+                # Log chi tiết về lỗi (theo System Instruction 4.3 - ERROR cho chi tiết lỗi)
                 if download_result.get('timeout_detected'):
-                    self.log('warning', f"Video bị timeout sau {download_result.get('retry_count', 0)} lần retry")
+                    self.log('warning', f"Video bị timeout sau {download_result.get('retry_count', 0)} lần retry", function_name)
                 elif download_result.get('skipped'):
-                    self.log('warning', f"Video bị skip do quá lâu (> {timeout_settings.get('max_download_time_seconds', 1800)}s)")
+                    self.log('warning', f"Video bị skip do quá lâu (> {timeout_settings.get('max_download_time_seconds', 1800)}s)", function_name)
                 else:
-                    self.log('error', f"Video tải thất bại: {error_msg}")
+                    self.log('error', f"Video tải thất bại: {error_msg}", function_name)
                 
                 # Nếu bị skip hoặc timeout, không cần kiểm tra orientation filter
                 if download_result.get('skipped') or download_result.get('timeout_detected'):
+                    self.log('info', "Process video hoàn thành - bị skip hoặc timeout", function_name)
                     return result
             
             # Bước 6: Kiểm tra orientation filter (nếu cần) - CHUYỂN SAU KHI TẢI XONG
@@ -2191,7 +2219,7 @@ class VideoDownloader:
                 # 直接ビデオURLの場合、ダウンロード後にメタデータから向きを判定する
                 if needs_orientation_check_after_download:
                     actual_orientation = self._get_video_orientation_from_file(file_path)
-                    self.log('info', f"Video {file_path} - actual_orientation={actual_orientation}, filter={orientation_filter}")
+                    self.log('info', f"Video {file_path} - actual_orientation={actual_orientation}, filter={orientation_filter}", function_name)
                     if actual_orientation != 'unknown' and actual_orientation != orientation_filter:
                         # フィルタに一致しない場合は削除 (cải thiện logging)
                         filter_name_map = {
@@ -2210,22 +2238,23 @@ class VideoDownloader:
                         
                         try:
                             os.remove(file_path)
-                            self.log('info', f"Đã xóa video {file_path} vì orientation không khớp với filter")
-                            self.log('info', f"  - Video orientation: {actual_orientation} ({actual_orientation_display})")
-                            self.log('info', f"  - Filter yêu cầu: {orientation_filter} ({filter_display_name})")
-                            self.log('info', f"  - Video ID: {result.get('video_id', 'N/A')}")
-                            self.log('info', f"  - Author: {result.get('author', 'N/A')}")
+                            self.log('info', f"Đã xóa video {os.path.basename(file_path)} vì orientation không khớp với filter", function_name)
+                            self.log('debug', f"  - Video orientation: {actual_orientation} ({actual_orientation_display})", function_name)
+                            self.log('debug', f"  - Filter yêu cầu: {orientation_filter} ({filter_display_name})", function_name)
+                            self.log('debug', f"  - Video ID: {result.get('video_id', 'N/A')}", function_name)
+                            self.log('debug', f"  - Author: {result.get('author', 'N/A')}", function_name)
                         except Exception as e:
-                            self.log('error', f"Không thể xóa file: {e}", exc_info=True)
+                            self.log('error', f"Không thể xóa file: {e}", function_name, exc_info=True)
                         result['error'] = f"Video orientation ({actual_orientation} - {actual_orientation_display}) không khớp với filter ({orientation_filter} - {filter_display_name})"
-                        result['filtered_by_orientation'] = True  # Đánh dấu là bị filter (mới)
+                        result['filtered_by_orientation'] = True  # Đánh dấu là bị filter
                         result['success'] = False
-                        result['orientation'] = actual_orientation  # Cập nhật orientation (mới)
+                        result['orientation'] = actual_orientation  # Cập nhật orientation
+                        self.log('info', "Process video hoàn thành - bị filter bởi orientation (sau khi tải)", function_name)
                         return result
                     elif actual_orientation != 'unknown':
                         # フィルタに一致する場合は、orientationを更新 (cải thiện logging)
                         orientation = actual_orientation
-                        result['orientation'] = actual_orientation  # Cập nhật orientation (mới)
+                        result['orientation'] = actual_orientation  # Cập nhật orientation
                         orientation_display_map = {
                             "horizontal": "Landscape (ngang)",
                             "vertical": "Portrait (dọc)",
@@ -2233,46 +2262,48 @@ class VideoDownloader:
                             "unknown": "Unknown"
                         }
                         orientation_display = orientation_display_map.get(orientation, orientation)
-                        self.log('info', f"Video {file_path} có orientation: {orientation} ({orientation_display}) - phù hợp với filter ({orientation_filter})")
+                        self.log('debug', f"Video {os.path.basename(file_path)} có orientation: {orientation} ({orientation_display}) - phù hợp với filter ({orientation_filter})", function_name)
                     else:
-                        self.log('warning', f"Không thể xác định orientation từ file {file_path}, giữ lại file")
+                        self.log('warning', f"Không thể xác định orientation từ file {os.path.basename(file_path)}, giữ lại file", function_name)
                 
                 # result['success'] đã được cập nhật từ download_result
                 result['file_path'] = file_path
             
         except Exception as e:
-            self.log('error', f"Exception trong process_video: {e}", exc_info=True)
+            # Log lỗi đầy đủ theo System Instruction 5 - exc_info=True
+            self.log('error', f"Exception trong process_video: {e}", function_name, exc_info=True)
             result['error'] = f"Lỗi: {str(e)}"
+            self.log('info', "Process video hoàn thành - Exception", function_name)
         
-        # Log kết quả cuối cùng
+        # Log kết quả cuối cùng (theo System Instruction 4.4 - log bắt đầu & kết thúc)
         if result.get('success'):
-            self.log('info', f"process_video - Thành công")
-            self.log('info', f"  - Video ID: {result.get('video_id', 'N/A')}")
-            # Đảm bảo file_path là絶対パスで表示
+            self.log('info', "Process video hoàn thành thành công", function_name)
+            self.log('debug', f"  - Video ID: {result.get('video_id', 'N/A')}", function_name)
+            # Đảm bảo file_path là絶対パスで表示 (theo System Instruction 8)
             file_path_log = result.get('file_path', 'N/A')
             if file_path_log != 'N/A':
                 file_path_log = os.path.abspath(file_path_log)
-            self.log('info', f"  - File path: {file_path_log}")
-            self.log('info', f"  - Author: {result.get('author', 'N/A')}")
-            # Log thống kê timeout và retry (nếu có)
+            self.log('info', f"  - File path: {file_path_log}", function_name)
+            self.log('debug', f"  - Author: {result.get('author', 'N/A')}", function_name)
+            # Log thống kê timeout và retry (theo System Instruction 4.3 - DEBUG cho output)
             if result.get('retry_count', 0) > 0:
-                self.log('info', f"  - Retry count: {result.get('retry_count', 0)}")
+                self.log('debug', f"  - Retry count: {result.get('retry_count', 0)}", function_name)
             if result.get('download_time', 0) > 0:
-                self.log('info', f"  - Download time: {result.get('download_time', 0):.2f}s ({result.get('download_time', 0)/60:.2f} phút)")
+                self.log('debug', f"  - Download time: {result.get('download_time', 0):.2f}s ({result.get('download_time', 0)/60:.2f} phút)", function_name)
             if result.get('file_size', 0) > 0:
-                self.log('info', f"  - File size: {result.get('file_size', 0)} bytes ({result.get('file_size', 0)/1024/1024:.2f} MB)")
+                self.log('debug', f"  - File size: {result.get('file_size', 0)} bytes ({result.get('file_size', 0)/1024/1024:.2f} MB)", function_name)
         else:
-            self.log('warning', f"process_video - Thất bại")
-            self.log('warning', f"  - Error: {result.get('error', 'Unknown error')}")
-            # Log thống kê timeout và retry (nếu có)
+            self.log('warning', "Process video hoàn thành - thất bại", function_name)
+            self.log('error', f"  - Error: {result.get('error', 'Unknown error')}", function_name)
+            # Log thống kê timeout và retry (theo System Instruction 4.3 - WARNING cho cảnh báo)
             if result.get('retry_count', 0) > 0:
-                self.log('warning', f"  - Retry count: {result.get('retry_count', 0)}")
+                self.log('warning', f"  - Retry count: {result.get('retry_count', 0)}", function_name)
             if result.get('timeout_detected'):
-                self.log('warning', f"  - Timeout detected: True")
+                self.log('warning', f"  - Timeout detected: True", function_name)
             if result.get('skipped'):
-                self.log('warning', f"  - Skipped: True (video quá lâu)")
+                self.log('warning', f"  - Skipped: True (video quá lâu)", function_name)
         
-        self.log('info', "=" * 60)
+        self.log('info', "=" * 60, function_name)
         return result
 
 
