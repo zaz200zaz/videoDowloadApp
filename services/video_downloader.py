@@ -1879,7 +1879,12 @@ class VideoDownloader:
             'timeout_detected': False,
             'skipped': False,
             'download_time': 0,
-            'file_size': 0
+            'file_size': 0,
+            # Thống kê orientation filter (mới)
+            'filtered_by_orientation': False,
+            'orientation': None,
+            'width': 0,
+            'height': 0
         }
         
         try:
@@ -1907,31 +1912,72 @@ class VideoDownloader:
             width = video_info.get('width', 0)
             height = video_info.get('height', 0)
             
-            # Log thông tin video để debug
-            self.log('info', f"Video info retrieved - video_id={video_id}, author={author}, orientation={orientation} ({width}x{height}), title={title[:50] if title else 'N/A'}")
-            self.log('info', f"Video info keys: {list(video_info.keys())}")
+            # Cập nhật result với thông tin orientation (mới)
+            result['orientation'] = orientation
+            result['width'] = width
+            result['height'] = height
             
-            # Kiểm tra orientation filter
+            # Tính tỷ lệ khung hình (aspect ratio) để log chi tiết (mới)
+            aspect_ratio = 0
+            if width > 0 and height > 0:
+                aspect_ratio = width / height
+                orientation_detailed = "landscape" if width > height else ("portrait" if height > width else "square")
+            else:
+                orientation_detailed = "unknown"
+            
+            # Log thông tin video để debug (cải thiện)
+            self.log('info', f"Video info retrieved - video_id={video_id}, author={author}, orientation={orientation} ({orientation_detailed}), size={width}x{height}, aspect_ratio={aspect_ratio:.2f}, title={title[:50] if title else 'N/A'}")
+            self.log('debug', f"Video info keys: {list(video_info.keys())}")
+            
+            # Kiểm tra orientation filter (cải thiện logging)
             # 直接ビデオURLの場合、orientationはunknownになるが、ダウンロード後に判定する
             # そのため、直接ビデオURLの場合は、ここではフィルタをスキップし、ダウンロード後に判定する
             is_direct_video_url = (video_info.get('video_id') is None and 
                                   video_info.get('title') == 'Direct Video')
             
             if orientation_filter != "all":
+                # Log filter đang được áp dụng (mới)
+                filter_name_map = {
+                    "horizontal": "Landscape (ngang)",
+                    "vertical": "Portrait (dọc)",
+                    "all": "Tất cả"
+                }
+                filter_display_name = filter_name_map.get(orientation_filter, orientation_filter)
+                self.log('info', f"Đang áp dụng orientation filter: {filter_display_name}")
+                
                 if orientation != "unknown":
                     # APIから取得したorientationがある場合、ここでフィルタを適用
+                    # Tính toán orientation dựa trên width/height nếu cần (mới)
+                    if width > 0 and height > 0:
+                        calculated_orientation = "horizontal" if width > height else ("vertical" if height > width else "square")
+                        if calculated_orientation != orientation and orientation != "square":
+                            self.log('debug', f"Orientation từ API ({orientation}) không khớp với tính toán ({calculated_orientation}), sử dụng orientation từ API")
+                    
                     if orientation != orientation_filter:
-                        result['error'] = f"Video orientation ({orientation}) không khớp với filter ({orientation_filter})"
-                        self.log('info', f"Bỏ qua video {video_id} vì orientation ({orientation}) không khớp với filter ({orientation_filter})")
+                        result['error'] = f"Video orientation ({orientation} - {orientation_detailed}) không khớp với filter ({orientation_filter} - {filter_display_name})"
+                        result['filtered_by_orientation'] = True  # Đánh dấu là bị filter (mới)
+                        # Log chi tiết về lý do filter (mới)
+                        self.log('info', f"Bỏ qua video {video_id} - Lý do: orientation không khớp")
+                        self.log('info', f"  - Video orientation: {orientation} ({orientation_detailed})")
+                        self.log('info', f"  - Video size: {width}x{height} (aspect ratio: {aspect_ratio:.2f})")
+                        self.log('info', f"  - Filter yêu cầu: {orientation_filter} ({filter_display_name})")
+                        self.log('info', f"  - Video ID: {video_id}")
+                        self.log('info', f"  - Author: {author}")
+                        self.log('info', f"  - Title: {title[:100] if title else 'N/A'}")
                         return result
                     else:
-                        self.log('info', f"Video {video_id} phù hợp với orientation filter: {orientation_filter}")
+                        self.log('info', f"Video {video_id} phù hợp với orientation filter: {orientation_filter} ({filter_display_name})")
+                        self.log('debug', f"  - Video size: {width}x{height} (aspect ratio: {aspect_ratio:.2f})")
                 elif is_direct_video_url:
                     # 直接ビデオURLの場合、ダウンロード後に判定する
-                    self.log('info', f"Video {video_id} là direct video URL, sẽ kiểm tra orientation sau khi tải")
+                    self.log('info', f"Video {video_id} là direct video URL, sẽ kiểm tra orientation sau khi tải (filter: {filter_display_name})")
                 else:
                     # orientationがunknownで、直接ビデオURLでもない場合
-                    self.log('warning', f"Video {video_id} có orientation=unknown, không thể áp dụng filter")
+                    self.log('warning', f"Video {video_id} có orientation=unknown, không thể áp dụng filter ({filter_display_name})")
+                    self.log('warning', f"  - Video size: {width}x{height} (aspect ratio: {aspect_ratio:.2f})")
+            else:
+                # Không có filter, log để debug (mới)
+                self.log('debug', f"Không có orientation filter, tải tất cả video (orientation: {orientation}, size: {width}x{height})")
             
             # Chọn video URL dựa trên format được chọn
             video_url = self._select_video_url(video_info, video_format)
@@ -2048,19 +2094,47 @@ class VideoDownloader:
                     actual_orientation = self._get_video_orientation_from_file(file_path)
                     self.log('info', f"Video {file_path} - actual_orientation={actual_orientation}, filter={orientation_filter}")
                     if actual_orientation != 'unknown' and actual_orientation != orientation_filter:
-                        # フィルタに一致しない場合は削除
+                        # フィルタに一致しない場合は削除 (cải thiện logging)
+                        filter_name_map = {
+                            "horizontal": "Landscape (ngang)",
+                            "vertical": "Portrait (dọc)",
+                            "all": "Tất cả"
+                        }
+                        filter_display_name = filter_name_map.get(orientation_filter, orientation_filter)
+                        orientation_display_map = {
+                            "horizontal": "Landscape (ngang)",
+                            "vertical": "Portrait (dọc)",
+                            "square": "Square (vuông)",
+                            "unknown": "Unknown"
+                        }
+                        actual_orientation_display = orientation_display_map.get(actual_orientation, actual_orientation)
+                        
                         try:
                             os.remove(file_path)
-                            self.log('info', f"Đã xóa video {file_path} vì orientation ({actual_orientation}) không khớp với filter ({orientation_filter})")
+                            self.log('info', f"Đã xóa video {file_path} vì orientation không khớp với filter")
+                            self.log('info', f"  - Video orientation: {actual_orientation} ({actual_orientation_display})")
+                            self.log('info', f"  - Filter yêu cầu: {orientation_filter} ({filter_display_name})")
+                            self.log('info', f"  - Video ID: {result.get('video_id', 'N/A')}")
+                            self.log('info', f"  - Author: {result.get('author', 'N/A')}")
                         except Exception as e:
                             self.log('error', f"Không thể xóa file: {e}", exc_info=True)
-                        result['error'] = f"Video orientation ({actual_orientation}) không khớp với filter ({orientation_filter})"
+                        result['error'] = f"Video orientation ({actual_orientation} - {actual_orientation_display}) không khớp với filter ({orientation_filter} - {filter_display_name})"
+                        result['filtered_by_orientation'] = True  # Đánh dấu là bị filter (mới)
                         result['success'] = False
+                        result['orientation'] = actual_orientation  # Cập nhật orientation (mới)
                         return result
                     elif actual_orientation != 'unknown':
-                        # フィルタに一致する場合は、orientationを更新
+                        # フィルタに一致する場合は、orientationを更新 (cải thiện logging)
                         orientation = actual_orientation
-                        self.log('info', f"Video {file_path} có orientation: {orientation} (từ file metadata) - phù hợp với filter")
+                        result['orientation'] = actual_orientation  # Cập nhật orientation (mới)
+                        orientation_display_map = {
+                            "horizontal": "Landscape (ngang)",
+                            "vertical": "Portrait (dọc)",
+                            "square": "Square (vuông)",
+                            "unknown": "Unknown"
+                        }
+                        orientation_display = orientation_display_map.get(orientation, orientation)
+                        self.log('info', f"Video {file_path} có orientation: {orientation} ({orientation_display}) - phù hợp với filter ({orientation_filter})")
                     else:
                         self.log('warning', f"Không thể xác định orientation từ file {file_path}, giữ lại file")
                 

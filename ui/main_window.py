@@ -43,6 +43,8 @@ class MainWindow:
         self.should_stop = False
         self.download_queue = queue.Queue()
         self.results = []
+        # Thống kê orientation filter (mới)
+        self.filtered_videos = []  # Danh sách video bị filter do orientation
         
         # Thiết lập giao diện
         self._setup_ui()
@@ -185,19 +187,19 @@ class MainWindow:
         orientation_frame = ttk.Frame(download_frame)
         orientation_frame.grid(row=3, column=0, sticky=tk.W, pady=5)
         
-        ttk.Label(orientation_frame, text="Lọc theo hướng:").pack(side=tk.LEFT, padx=5)
+        ttk.Label(orientation_frame, text="Lọc theo hướng (Landscape/Portrait):").pack(side=tk.LEFT, padx=5)
         saved_orientation = self.cookie_manager.get_setting("orientation_filter", "all")
         orientation_text_map = {
             "all": "Tất cả",
-            "vertical": "Video dọc",
-            "horizontal": "Video ngang"
+            "vertical": "Portrait (Video dọc)",
+            "horizontal": "Landscape (Video ngang)"
         }
         orientation_text = orientation_text_map.get(saved_orientation, "Tất cả")
         self.orientation_var = tk.StringVar(value=orientation_text)
         orientation_options = [
             ("Tất cả", "all"),
-            ("Video dọc", "vertical"),
-            ("Video ngang", "horizontal")
+            ("Portrait (Video dọc)", "vertical"),
+            ("Landscape (Video ngang)", "horizontal")
         ]
         self.orientation_combo = ttk.Combobox(orientation_frame, textvariable=self.orientation_var,
                                               values=[opt[0] for opt in orientation_options],
@@ -731,13 +733,24 @@ class MainWindow:
         # Lưu setting
         orientation_map = {
             "Tất cả": "all",
+            "Portrait (Video dọc)": "vertical",
+            "Landscape (Video ngang)": "horizontal",
+            # Backward compatibility
             "Video dọc": "vertical",
             "Video ngang": "horizontal"
         }
         orientation_value = orientation_map.get(selected_orientation, "all")
         self.cookie_manager.set_setting("orientation_filter", orientation_value)
         if self.logger:
+            filter_display_map = {
+                "all": "Tất cả",
+                "vertical": "Portrait (Video dọc)",
+                "horizontal": "Landscape (Video ngang)"
+            }
+            filter_display = filter_display_map.get(orientation_value, orientation_value)
             self.logger.info(f"Lọc theo hướng video đã thay đổi: {selected_orientation} ({orientation_value})")
+            self.logger.info(f"  - Filter: {filter_display}")
+            self.logger.info(f"  - Mô tả: {'Tải tất cả video' if orientation_value == 'all' else ('Chỉ tải video dọc (height > width)' if orientation_value == 'vertical' else 'Chỉ tải video ngang (width > height)')}")
     
     def _select_folder(self):
         """Chọn thư mục lưu video"""
@@ -1045,6 +1058,7 @@ class MainWindow:
         
         # Reset trạng thái
         self.results = []
+        self.filtered_videos = []  # Reset filtered videos list (mới)
         self.status_tree.delete(*self.status_tree.get_children())
         
         # Cập nhật UI
@@ -1088,6 +1102,21 @@ class MainWindow:
         try:
             if self.logger:
                 self.logger.debug(f"_on_download_result - Received result: success={result.get('success')}, video_id={result.get('video_id')}")
+            
+            # Thu thập thống kê orientation filter (mới)
+            if result.get('filtered_by_orientation'):
+                self.filtered_videos.append({
+                    'video_id': result.get('video_id', 'N/A'),
+                    'url': result.get('url', 'N/A'),
+                    'author': result.get('author', 'N/A'),
+                    'orientation': result.get('orientation', 'unknown'),
+                    'width': result.get('width', 0),
+                    'height': result.get('height', 0),
+                    'error': result.get('error', 'Unknown error')
+                })
+                # Log để debug
+                if self.logger:
+                    self.logger.debug(f"Video bị filter: video_id={result.get('video_id')}, orientation={result.get('orientation')}")
             
             # 絶対パスに変換
             if result.get('file_path'):
@@ -1152,23 +1181,136 @@ class MainWindow:
         success = sum(1 for r in self.results if r['success'])
         failed = total - success
         
+        # Thống kê orientation filter (mới)
+        filtered_count = len(self.filtered_videos)
+        
         if self.logger:
             self.logger.info(f"Download - Thống kê: Tổng={total}, Thành công={success}, Thất bại={failed}")
+            if filtered_count > 0:
+                self.logger.info(f"Download - Video bị bỏ qua do orientation filter: {filtered_count}")
         
+        # Hiển thị thông báo với thống kê orientation filter (mới)
+        orientation_filter = self.cookie_manager.get_setting("orientation_filter", "all")
+        filter_display_map = {
+            "all": "Tất cả",
+            "vertical": "Portrait (Video dọc)",
+            "horizontal": "Landscape (Video ngang)"
+        }
+        filter_display = filter_display_map.get(orientation_filter, orientation_filter)
+        
+        message = f"Hoàn tất!\n\n"
+        message += f"Tổng số: {total}\n"
+        message += f"Thành công: {success}\n"
+        message += f"Thất bại: {failed}\n"
+        
+        if filtered_count > 0:
+            message += f"\nVideo bị bỏ qua do orientation filter ({filter_display}): {filtered_count}"
+        
+        # Cập nhật UI labels
         self.progress_label.config(text=f"Hoàn tất! Thành công: {success}/{total}")
         self.stats_label.config(text=f"Tổng: {total} | Thành công: {success} | Thất bại: {failed}")
         
-        # Hiển thị thông báo
-        download_folder = self.cookie_manager.get_download_folder()
-        if self.logger:
-            self.logger.info(f"Download - Hiển thị thông báo hoàn tất: {total} video, {success} thành công, {failed} thất bại")
-        messagebox.showinfo(
-            "Hoàn tất",
-            f"Đã tải xong {total} video!\n\n"
-            f"Thành công: {success}\n"
-            f"Thất bại: {failed}\n\n"
-            f"Thư mục: {download_folder}"
+        # Hiển thị danh sách video bị filter (mới)
+        if filtered_count > 0:
+            response = messagebox.askyesno(
+                "Hoàn tất",
+                message + "\n\nBạn có muốn xem danh sách video bị bỏ qua không?",
+                icon='question'
+            )
+            
+            if response:
+                # Tạo window hiển thị danh sách video bị filter
+                self._show_filtered_videos_list()
+        else:
+            messagebox.showinfo("Hoàn tất", message)
+        
+        # Reset filtered videos list cho lần tải tiếp theo (mới)
+        self.filtered_videos = []
+    
+    def _show_filtered_videos_list(self):
+        """Hiển thị danh sách video bị filter do orientation (mới)"""
+        if not self.filtered_videos:
+            return
+        
+        # Tạo window mới
+        filtered_window = tk.Toplevel(self.root)
+        filtered_window.title("Danh sách video bị bỏ qua do orientation filter")
+        filtered_window.geometry("900x600")
+        
+        # Label
+        orientation_filter = self.cookie_manager.get_setting("orientation_filter", "all")
+        filter_display_map = {
+            "all": "Tất cả",
+            "vertical": "Portrait (Video dọc)",
+            "horizontal": "Landscape (Video ngang)"
+        }
+        filter_display = filter_display_map.get(orientation_filter, orientation_filter)
+        
+        info_label = tk.Label(
+            filtered_window,
+            text=f"Filter đang áp dụng: {filter_display}\nTổng số video bị bỏ qua: {len(self.filtered_videos)}",
+            font=("Arial", 10, "bold")
         )
+        info_label.pack(pady=10)
+        
+        # Treeview để hiển thị danh sách
+        columns = ("ID", "Video ID", "Author", "Orientation", "Size", "URL")
+        tree = ttk.Treeview(filtered_window, columns=columns, show="headings", height=20)
+        
+        # Định nghĩa headings
+        tree.heading("ID", text="STT")
+        tree.heading("Video ID", text="Video ID")
+        tree.heading("Author", text="Author")
+        tree.heading("Orientation", text="Orientation")
+        tree.heading("Size", text="Size (WxH)")
+        tree.heading("URL", text="URL")
+        
+        # Định nghĩa column widths
+        tree.column("ID", width=50)
+        tree.column("Video ID", width=150)
+        tree.column("Author", width=150)
+        tree.column("Orientation", width=120)
+        tree.column("Size", width=120)
+        tree.column("URL", width=300)
+        
+        # Scrollbar
+        scrollbar = ttk.Scrollbar(filtered_window, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
+        
+        # Thêm dữ liệu
+        orientation_display_map = {
+            "horizontal": "Landscape (ngang)",
+            "vertical": "Portrait (dọc)",
+            "square": "Square (vuông)",
+            "unknown": "Unknown"
+        }
+        
+        for idx, video in enumerate(self.filtered_videos, 1):
+            orientation_display = orientation_display_map.get(video.get('orientation', 'unknown'), video.get('orientation', 'unknown'))
+            size_str = f"{video.get('width', 0)}x{video.get('height', 0)}"
+            if video.get('width', 0) > 0 and video.get('height', 0) > 0:
+                aspect_ratio = video.get('width', 0) / video.get('height', 0)
+                size_str += f" ({aspect_ratio:.2f})"
+            
+            url_display = video.get('url', 'N/A')
+            if len(url_display) > 80:
+                url_display = url_display[:80] + "..."
+            
+            tree.insert("", tk.END, values=(
+                idx,
+                video.get('video_id', 'N/A'),
+                video.get('author', 'N/A'),
+                orientation_display,
+                size_str,
+                url_display
+            ))
+        
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=10, pady=10)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=10)
+        
+        # Close button
+        close_btn = ttk.Button(filtered_window, text="Đóng", command=filtered_window.destroy)
+        close_btn.pack(pady=10)
     
     def _stop_download(self):
         """Dừng quá trình tải"""

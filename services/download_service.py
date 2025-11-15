@@ -137,6 +137,10 @@ class DownloadService:
         retry_total_count = 0
         skipped_count = 0
         
+        # Thống kê orientation filter (mới)
+        filtered_by_orientation_count = 0
+        filtered_videos_info = []  # Danh sách video bị filter để hiển thị cho user
+        
         # Đảm bảo download_folder là絶対パス
         import os
         download_folder = os.path.abspath(download_folder)
@@ -191,6 +195,20 @@ class DownloadService:
                     if result.get('skipped'):
                         skipped_count += 1
                     
+                    # Thu thập thống kê orientation filter (mới)
+                    if result.get('filtered_by_orientation'):
+                        filtered_by_orientation_count += 1
+                        # Lưu thông tin video bị filter để hiển thị cho user
+                        filtered_videos_info.append({
+                            'video_id': result.get('video_id', 'N/A'),
+                            'url': link,
+                            'author': result.get('author', 'N/A'),
+                            'orientation': result.get('orientation', 'unknown'),
+                            'width': result.get('width', 0),
+                            'height': result.get('height', 0),
+                            'error': result.get('error', 'Unknown error')
+                        })
+                    
                     # 結果をログに記録
                     if self.logger:
                         if result.get('success'):
@@ -225,6 +243,13 @@ class DownloadService:
                                 self.logger.warning(f"    - Timeout detected: True (sau {result.get('retry_count', 0)} lần retry)")
                             if result.get('skipped'):
                                 self.logger.warning(f"    - Skipped: True (video quá lâu)")
+                            # Log thống kê orientation filter cho video thất bại (mới)
+                            if result.get('filtered_by_orientation'):
+                                self.logger.info(f"    - Filtered by orientation: True")
+                                self.logger.info(f"    - Video orientation: {result.get('orientation', 'unknown')}")
+                                if result.get('width', 0) > 0 and result.get('height', 0) > 0:
+                                    aspect_ratio = result.get('width', 0) / result.get('height', 0)
+                                    self.logger.info(f"    - Video size: {result.get('width', 0)}x{result.get('height', 0)} (aspect ratio: {aspect_ratio:.2f})")
                     
                     # 処理後に再度停止シグナルをチェック
                     if self.should_stop:
@@ -281,6 +306,19 @@ class DownloadService:
                 self.logger.info(f"  - Video bị timeout: {timeout_count}")
                 self.logger.info(f"  - Video bị skip (quá lâu): {skipped_count}")
                 self.logger.info(f"  - Tổng số lần retry: {retry_total_count}")
+                # Thống kê orientation filter (mới)
+                if orientation_filter != "all":
+                    self.logger.info(f"  - Video bị bỏ qua do orientation filter ({orientation_filter}): {filtered_by_orientation_count}")
+                    if filtered_videos_info:
+                        self.logger.info(f"  - Danh sách video bị bỏ qua:")
+                        for idx, filtered_video in enumerate(filtered_videos_info, 1):
+                            self.logger.info(f"    {idx}. Video ID: {filtered_video['video_id']}")
+                            self.logger.info(f"       - Author: {filtered_video['author']}")
+                            self.logger.info(f"       - Orientation: {filtered_video['orientation']}")
+                            if filtered_video['width'] > 0 and filtered_video['height'] > 0:
+                                aspect_ratio = filtered_video['width'] / filtered_video['height']
+                                self.logger.info(f"       - Size: {filtered_video['width']}x{filtered_video['height']} (aspect ratio: {aspect_ratio:.2f})")
+                            self.logger.info(f"       - URL: {filtered_video['url']}")
                 self.logger.info(f"  - Tổng thời gian: {total_time:.2f} giây ({total_time/60:.2f} phút)")
                 if total_time > 0 and total_download_size > 0:
                     avg_speed_mbps = (total_download_size / 1024 / 1024) / total_time
