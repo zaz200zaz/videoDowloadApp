@@ -347,9 +347,10 @@ class TestCookieManager(unittest.TestCase):
             with open(self.test_config_file, 'w', encoding='utf-8') as f:
                 json.dump(config, f, ensure_ascii=False, indent=2)
             
-            # Đợi cache expire (6 giây - nhiều hơn cache duration 5 giây)
+            # Đợi cache expire (11 giây - nhiều hơn cache duration 10 giây)
+            # Cache duration đã được tăng từ 5 giây lên 10 giây để tối ưu I/O operations
             self.test_logger.debug(f"[{function_name}] Đợi cache expire...")
-            time.sleep(6)
+            time.sleep(11)
             
             # Lần 3: Đọc lại sau khi cache expire (sẽ đọc lại từ file)
             result3 = self.manager.get_cookie()

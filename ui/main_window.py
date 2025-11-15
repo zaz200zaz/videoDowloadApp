@@ -15,7 +15,7 @@ import logging
 class MainWindow:
     """Cửa sổ chính của ứng dụng"""
     
-    def __init__(self, root: tk.Tk, cookie_manager, logger=None):
+    def __init__(self, root: tk.Tk, cookie_manager, logger=None, navigation_controller=None):
         """
         Khởi tạo MainWindow
         
@@ -23,10 +23,14 @@ class MainWindow:
             root: Tkinter root window
             cookie_manager: CookieManager instance
             logger: Logger instance (optional)
+            navigation_controller: NavigationController instance (optional, để hỗ trợ back navigation)
         """
         self.root = root
         self.cookie_manager = cookie_manager
         self.logger = logger or logging.getLogger('MainWindow')
+        # Lưu navigation_controller để hỗ trợ back navigation (iOS-style)
+        # Nếu None, không hiển thị back button (tương thích với code cũ)
+        self.navigation_controller = navigation_controller
         
         # Controllersを初期化
         from controllers.cookie_controller import CookieController
@@ -54,6 +58,46 @@ class MainWindow:
         if self.logger:
             self.logger.info("MainWindow.__init__ - Khởi tạo hoàn tất")
     
+    def _on_back_click(self):
+        """
+        Event handler cho back button (iOS-style navigation)
+        
+        Mục đích:
+        - Quay lại Home Screen (Main Dashboard) khi nhấn back button
+        - Sử dụng navigation_controller để điều hướng back
+        
+        Flow:
+        1. Ghi log back action (theo System Instruction)
+        2. Gọi navigation_controller.go_back() để quay lại screen trước
+        3. Ghi log kết quả (theo System Instruction)
+        """
+        function_name = "MainWindow._on_back_click"
+        
+        if not self.navigation_controller:
+            if self.logger:
+                self.logger.warning(f"[{function_name}] NavigationController not available, cannot go back")
+            return
+        
+        try:
+            # Log back action (theo System Instruction)
+            if self.logger:
+                self.logger.info(f"[{function_name}] User clicked back button - navigating back to Home Screen")
+            
+            # Gọi navigation_controller.go_back() để quay lại screen trước (iOS-style)
+            success = self.navigation_controller.go_back()
+            
+            if success:
+                if self.logger:
+                    self.logger.info(f"[{function_name}] Successfully navigated back to Home Screen")
+            else:
+                if self.logger:
+                    self.logger.warning(f"[{function_name}] Cannot go back: already at home screen")
+                    
+        except Exception as e:
+            # Log error đầy đủ (theo System Instruction)
+            if self.logger:
+                self.logger.error(f"[{function_name}] Error during back navigation: {e}", exc_info=True)
+    
     def _setup_ui(self):
         """Thiết lập giao diện"""
         self.root.title("Douyin Video Downloader")
@@ -71,9 +115,29 @@ class MainWindow:
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
         
+        # ========== BACK BUTTON (iOS-style navigation) ==========
+        # Thêm back button nếu có navigation_controller (theo iOS-style navigation)
+        # Không thay đổi logic hiện có, chỉ thêm tính năng back navigation
+        if self.navigation_controller:
+            back_frame = ttk.Frame(main_frame)
+            back_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+            back_frame.columnconfigure(0, weight=1)
+            
+            # Back button (iOS-style)
+            self.back_btn = ttk.Button(back_frame, text="← Back to Home", command=self._on_back_click)
+            self.back_btn.grid(row=0, column=0, sticky=tk.W, padx=5)
+            
+            if self.logger:
+                self.logger.info("MainWindow._setup_ui - Back button added for iOS-style navigation")
+            
+            # Tăng row index cho các phần sau
+            row_offset = 1
+        else:
+            row_offset = 0
+        
         # ========== PHẦN 1: COOKIE ==========
         cookie_frame = ttk.LabelFrame(main_frame, text="1. Cookie Douyin", padding="10")
-        cookie_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        cookie_frame.grid(row=0 + row_offset, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         cookie_frame.columnconfigure(0, weight=1)
         
         ttk.Label(cookie_frame, text="Nhập cookie Douyin:").grid(row=0, column=0, sticky=tk.W, pady=5)
@@ -98,10 +162,10 @@ class MainWindow:
         
         # ========== PHẦN 2: LINK VIDEO ==========
         links_frame = ttk.LabelFrame(main_frame, text="2. Danh sách Link Video", padding="10")
-        links_frame.grid(row=1, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        links_frame.grid(row=1 + row_offset, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         links_frame.columnconfigure(0, weight=1)
         links_frame.rowconfigure(1, weight=1, minsize=150)  # Đảm bảo có chiều cao tối thiểu
-        main_frame.rowconfigure(1, weight=1)
+        main_frame.rowconfigure(1 + row_offset, weight=1)
         
         links_buttons = ttk.Frame(links_frame)
         links_buttons.grid(row=0, column=0, columnspan=2, sticky=tk.W, pady=5)
@@ -130,7 +194,7 @@ class MainWindow:
         
         # ========== PHẦN 3: TẢI VIDEO ==========
         download_frame = ttk.LabelFrame(main_frame, text="3. Tải Video", padding="10")
-        download_frame.grid(row=2, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
+        download_frame.grid(row=2 + row_offset, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
         download_frame.columnconfigure(0, weight=1)
         
         download_buttons = ttk.Frame(download_frame)
@@ -217,10 +281,10 @@ class MainWindow:
         
         # ========== PHẦN 4: DANH SÁCH TRẠNG THÁI ==========
         status_frame = ttk.LabelFrame(main_frame, text="4. Trạng thái tải", padding="10")
-        status_frame.grid(row=3, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
+        status_frame.grid(row=3 + row_offset, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         status_frame.columnconfigure(0, weight=1)
         status_frame.rowconfigure(0, weight=1)
-        main_frame.rowconfigure(3, weight=1)
+        main_frame.rowconfigure(3 + row_offset, weight=1)
         
         # Treeview để hiển thị danh sách
         columns = ('url', 'status', 'file')

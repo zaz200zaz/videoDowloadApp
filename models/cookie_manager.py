@@ -126,10 +126,11 @@ class CookieManager:
         import time
         
         try:
-            # Kiểm tra cache (cache trong 5 giây để tránh đọc quá nhiều lần - tối ưu I/O operations)
+            # Kiểm tra cache (cache trong 10 giây để tránh đọc quá nhiều lần - tối ưu I/O operations)
             # Theo System Instruction 6: Giảm thiểu I/O operations (sử dụng cache khi có thể)
+            # Tăng cache time từ 5 giây lên 10 giây để giảm I/O operations (theo System Instruction 6 - tối ưu hiệu suất)
             if use_cache and self._config_cache is not None and self._config_cache_time is not None:
-                if time.time() - self._config_cache_time < 5.0:  # Cache 5 giây (tăng từ 1 giây để tối ưu)
+                if time.time() - self._config_cache_time < 10.0:  # Cache 10 giây (tăng từ 5 giây để tối ưu I/O)
                     write_log('DEBUG', function_name, "Sử dụng cache config", self.logger)
                     return self._config_cache
             

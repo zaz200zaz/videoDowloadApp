@@ -171,7 +171,15 @@ class VideoDownloader:
             self.logger.info(formatted_message, exc_info=exc_info)
     
     def _setup_session(self):
-        """Thiết lập session với headers và cookie"""
+        """
+        Thiết lập session với headers và cookie (theo System Instruction 6 - tối ưu network performance)
+        
+        Flow:
+        1. Tắt urllib3 DEBUG logs để giảm log file size
+        2. Làm sạch cookie
+        3. Cấu hình headers
+        4. Cấu hình connection pool và retry strategy (tối ưu network operations)
+        """
         # Tắt urllib3 DEBUG logs để giảm log file size (theo System Instruction)
         import logging
         logging.getLogger('urllib3').setLevel(logging.WARNING)
@@ -192,10 +200,33 @@ class VideoDownloader:
         }
         self.session.headers.update(headers)
         
+        # Cấu hình connection pool và retry strategy để tối ưu network performance
+        # (theo System Instruction 6 - tối ưu network operations)
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        
+        # Tạo retry strategy (tối ưu network resilience)
+        retry_strategy = Retry(
+            total=3,  # Tổng số retry
+            backoff_factor=1,  # Backoff factor (1, 2, 4 giây)
+            status_forcelist=[429, 500, 502, 503, 504],  # HTTP status codes để retry
+            allowed_methods=["GET", "HEAD"]  # Chỉ retry GET và HEAD requests
+        )
+        
+        # Cấu hình adapter với connection pool và retry strategy (tối ưu performance)
+        adapter = HTTPAdapter(
+            max_retries=retry_strategy,
+            pool_connections=10,  # Số lượng connection pools (tăng từ default 10)
+            pool_maxsize=20,  # Kích thước tối đa của pool (tăng từ default 10)
+        )
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+        
         # Debug: kiểm tra cookie có được set đúng không
         function_name = "VideoDownloader._setup_session"
         if len(clean_cookie) > 0:
             self.log('info', f"Cookie đã được set (length: {len(clean_cookie)})", function_name)
+            self.log('debug', f"Connection pool configured: pool_connections=10, pool_maxsize=20 (tối ưu network performance)", function_name)
         else:
             self.log('warning', "WARNING: Cookie rỗng!", function_name)
     
@@ -243,11 +274,33 @@ class VideoDownloader:
                 return None
             
             # Xử lý short URL (v.douyin.com) - cần resolve redirect
+            # (theo System Instruction 6 - tối ưu hiệu suất: sử dụng existing session nếu có thể)
             if "v.douyin.com" in url or "iesdouyin.com" in url:
                 try:
-                    # Tạo session mới không có cookie để resolve redirect
-                    # (vì cookie có thể chứa ký tự không hợp lệ)
+                    # Sử dụng existing session để tái sử dụng connection pool (tối ưu network performance)
+                    # Tạo session tạm thời chỉ khi cần thiết để tránh cookie conflicts
+                    # (theo System Instruction 6 - tối ưu network operations)
                     temp_session = requests.Session()
+                    # Cấu hình connection pool để tối ưu performance (theo System Instruction 6)
+                    from requests.adapters import HTTPAdapter
+                    from urllib3.util.retry import Retry
+                    
+                    # Tạo retry strategy
+                    retry_strategy = Retry(
+                        total=2,  # Tổng số retry
+                        backoff_factor=0.5,  # Backoff factor
+                        status_forcelist=[429, 500, 502, 503, 504],  # HTTP status codes để retry
+                    )
+                    
+                    # Cấu hình adapter với connection pool và retry strategy
+                    adapter = HTTPAdapter(
+                        max_retries=retry_strategy,
+                        pool_connections=5,  # Số lượng connection pools
+                        pool_maxsize=10,  # Kích thước tối đa của pool
+                    )
+                    temp_session.mount("http://", adapter)
+                    temp_session.mount("https://", adapter)
+                    
                     temp_session.headers.update({
                         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
@@ -258,6 +311,8 @@ class VideoDownloader:
                     response = temp_session.get(url, allow_redirects=True, timeout=15)
                     final_url = response.url
                     url = final_url
+                    # Đóng session để giải phóng tài nguyên (theo System Instruction 8 - resource management)
+                    temp_session.close()
                     self.log('debug', f"Đã resolve short URL thành: {url}", function_name)
                 except Exception as e:
                     self.log('warning', f"Lỗi khi resolve short URL: {e}", function_name, exc_info=True)
@@ -1417,18 +1472,24 @@ class VideoDownloader:
                             # Xác định hướng video
                             orientation = 'unknown'
                             if width > 0 and height > 0:
-                                # Log để debug
-                                self.log('info', f"Video {aweme_id} (get_all_videos_from_user): width={width}, height={height}, ratio={height/width if width > 0 else 0:.2f}", function_name)
+                                # Log để debug (giảm log frequency để tối ưu I/O - theo System Instruction 6)
+                                # Chỉ log mỗi 10 video để giảm I/O operations
+                                if len(video_urls) % 10 == 0:
+                                    self.log('debug', f"Video {aweme_id} (get_all_videos_from_user): width={width}, height={height}, ratio={height/width if width > 0 else 0:.2f}", function_name)
                                 if height > width:
                                     orientation = 'vertical'  # 縦向き (dọc)
                                 elif width > height:
                                     orientation = 'horizontal'  # 横向き (ngang)
                                 else:
                                     orientation = 'square'  # 正方形
-                                self.log('info', f"Video {aweme_id} (get_all_videos_from_user): orientation={orientation} (width={width}, height={height})", function_name)
+                                # Chỉ log orientation khi cần thiết (giảm log frequency)
+                                if len(video_urls) % 10 == 0:
+                                    self.log('debug', f"Video {aweme_id} (get_all_videos_from_user): orientation={orientation} (width={width}, height={height})", function_name)
                             
-                            # Log thông tin video để debug
-                            self.log('info', f"Video {len(video_urls)+1}: aweme_id={aweme_id}, orientation={orientation} ({width}x{height}), author={author_nickname} (@{author_unique_id}), desc={desc}", function_name)
+                            # Log thông tin video để debug (giảm log frequency để tối ưu I/O - theo System Instruction 6)
+                            # Chỉ log mỗi 10 video hoặc video quan trọng để giảm I/O operations
+                            if len(video_urls) % 10 == 0 or not video_url:
+                                self.log('info', f"Video {len(video_urls)+1}: aweme_id={aweme_id}, orientation={orientation} ({width}x{height}), author={author_nickname} (@{author_unique_id}), desc={desc}", function_name)
                             
                             # Thử lấy direct video URL trước (giống như douyin-video-links1.txt)
                             video_url = None
@@ -1737,6 +1798,13 @@ class VideoDownloader:
                         downloaded_size += len(chunk)
                         chunk_count += 1
                         
+                        # Giảm log frequency để tối ưu I/O operations (theo System Instruction 6)
+                        # Log progress mỗi 1000 chunks thay vì mỗi chunk (tối ưu performance)
+                        if chunk_count % 1000 == 0:
+                            # Log progress mỗi 1000 chunks (theo System Instruction 6 - giảm I/O operations)
+                            progress_percent = (downloaded_size / file_size * 100) if file_size else 0
+                            self.log('debug', f"Download progress: {downloaded_size} / {file_size if file_size else 'unknown'} bytes ({progress_percent:.1f}%) - {chunk_count} chunks", function_name)
+                        
                         # Timeout detection: Kiểm tra xem có progress trong chunk_timeout giây không
                         if enable_timeout_detection and chunk_timeout > 0:
                             current_chunk_time = time.time()
@@ -1775,17 +1843,16 @@ class VideoDownloader:
                                     }
                         
                         # Log tiến trình mỗi 1000 chunks hoặc mỗi 25% (giảm log spam - System Instruction 6.2)
-                        # Tăng từ 500 lên 1000 chunks để giảm log I/O operations
+                        # Tăng từ 500 lên 1000 chunks để giảm log I/O operations (tối ưu I/O)
+                        # Note: Progress log đã được log ở trên (chunk_count % 1000), không cần log lại ở đây
+                        # Chỉ log nếu chưa được log ở trên (progress % 25)
                         if content_length:
                             progress = (downloaded_size / file_size) * 100
                             progress_int = int(progress)
-                            # Log mỗi 1000 chunks hoặc mỗi 25% progress (giảm log spam)
-                            if chunk_count % 1000 == 0 or (progress_int % 25 == 0 and chunk_count % 500 == 0):
+                            # Log mỗi 25% progress (nhưng không log nếu đã log ở trên - chunk_count % 1000 == 0)
+                            if progress_int % 25 == 0 and chunk_count % 1000 != 0:
                                 self.log('debug', f"Đã tải: {downloaded_size} / {file_size} bytes ({progress:.1f}%)", function_name)
-                        else:
-                            # Không có content_length, log mỗi 1000 chunks (tăng từ 500)
-                            if chunk_count % 1000 == 0:
-                                self.log('debug', f"Đã tải: {downloaded_size} bytes ({chunk_count} chunks)", function_name)
+                        # Không có content_length: đã được log ở trên (chunk_count % 1000)
             
             # Kiểm tra file đã tải
             end_time = time.time()
@@ -1857,19 +1924,33 @@ class VideoDownloader:
             }
             
         except requests.exceptions.RequestException as e:
-            self.log('error', f"Request error khi tải video: {e}", exc_info=True)
+            # Cải thiện error handling cho 403 Forbidden (theo System Instruction - logging đầy đủ)
+            error_message = str(e)
+            status_code = None
+            if hasattr(e, 'response') and e.response is not None:
+                status_code = e.response.status_code
+                if status_code == 403:
+                    self.log('error', f"403 Forbidden - Video URL có thể đã hết hạn hoặc cần xác thực: {video_url[:100]}...", function_name, exc_info=True)
+                    self.log('warning', "Lý do có thể: URL trực tiếp đã hết hạn, cookie không hợp lệ, hoặc video không khả dụng", function_name)
+                    error_message = f"403 Forbidden: Video URL có thể đã hết hạn hoặc cần xác thực"
+                else:
+                    self.log('error', f"HTTP Error {status_code} khi tải video: {e}", function_name, exc_info=True)
+            else:
+                self.log('error', f"Request error khi tải video: {e}", function_name, exc_info=True)
             
-            # Retry nếu được bật
-            if enable_auto_retry and retry_count < max_retries:
-                self.log('info', f"Sẽ retry download sau {timeout_settings.get('retry_delay_seconds', 5)} giây...")
+            # Retry nếu được bật (nhưng không retry 403 vì URL đã hết hạn)
+            if enable_auto_retry and retry_count < max_retries and status_code != 403:
+                self.log('info', f"Sẽ retry download sau {timeout_settings.get('retry_delay_seconds', 5)} giây...", function_name)
                 return self.download_video_with_retry(
                     video_url, save_path, timeout_settings, retry_count + 1
                 )
+            elif status_code == 403:
+                self.log('warning', "403 Forbidden - Không retry vì URL có thể đã hết hạn", function_name)
             
-            self.log('error', "=" * 60)
+            self.log('error', "=" * 60, function_name)
             return {
                 'success': False,
-                'error': f'Request error: {str(e)}',
+                'error': error_message,
                 'retry_count': retry_count,
                 'timeout_detected': False,
                 'skipped': False,

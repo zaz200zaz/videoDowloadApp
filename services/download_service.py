@@ -146,11 +146,15 @@ class DownloadService:
         filtered_videos_info = []  # Danh sách video bị filter để hiển thị cho user
         
         # Lấy max_concurrent từ config (theo System Instruction - tối ưu tốc độ tải)
+        # (theo System Instruction 6 - tối ưu concurrent operations)
         max_concurrent = 3  # Default
         try:
+            # Sử dụng CookieManager với cache để giảm I/O operations (tối ưu performance)
             cookie_manager = CookieManager()
-            config = cookie_manager._load_config(use_cache=True)
+            config = cookie_manager._load_config(use_cache=True)  # Sử dụng cache để tối ưu I/O
             max_concurrent = config.get('settings', {}).get('max_concurrent', 3)
+            # Giới hạn max_concurrent để tránh quá tải network (theo System Instruction 6)
+            max_concurrent = min(max_concurrent, 10)  # Giới hạn tối đa 10 concurrent downloads
         except Exception as e:
             if self.logger:
                 self.logger.warning(f"Không thể lấy max_concurrent từ config, sử dụng default: {max_concurrent} - {e}")
@@ -229,14 +233,16 @@ class DownloadService:
                 video_duration = video_end_time - video_start_time
                 
                 # Log thời gian download (theo System Instruction - log thời gian từng video)
+                # Note: Chi tiết download time đã được log trong download_video_with_retry(), 
+                # ở đây chỉ lưu thống kê để tránh duplicate logs (theo System Instruction 6 - tối ưu I/O)
                 if self.logger:
                     with video_times_lock:
                         video_times[idx]['end'] = video_end_time
                         video_times[idx]['duration'] = video_duration
                         video_times[idx]['status'] = 'success' if result.get('success') else 'failed'
                     
-                    self.logger.info(f"  - End time: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(video_end_time))}")
-                    self.logger.info(f"  - Download duration: {video_duration:.2f} seconds ({video_duration/60:.2f} minutes)")
+                    # Chỉ log warning nếu video mất thời gian bất thường (> 5 phút)
+                    # Chi tiết download time đã được log trong download_video_with_retry() (theo System Instruction - tránh duplicate logs)
                     if video_duration > 300:  # Nếu > 5 phút, log warning (theo System Instruction - xác định video mất thời gian bất thường)
                         self.logger.warning(f"  - ⚠️ Video {idx+1} mất thời gian bất thường: {video_duration:.2f}s ({video_duration/60:.2f} phút)")
                 

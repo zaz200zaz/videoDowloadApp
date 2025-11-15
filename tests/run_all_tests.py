@@ -52,12 +52,17 @@ def setup_test_logging():
     ))
     logger.addHandler(file_handler)
     
-    # Console handler
+    # Console handler với UTF-8 encoding (Windows環境でのUnicodeエンコーディングエラーを防ぐ)
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(logging.Formatter(
         '[%(levelname)s] [%(name)s] %(message)s'
     ))
+    # Windows環境でのUnicodeエンコーディングエラーを防ぐため、streamをUTF-8でエンコード
+    import sys
+    if sys.platform == 'win32':
+        import io
+        console_handler.stream = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
     logger.addHandler(console_handler)
     
     logger.info(f"[{function_name}] Test logging initialized")
@@ -99,10 +104,18 @@ def run_all_tests():
         test_count = test_suite.countTestCases()
         logger.info(f"[{function_name}] Tìm thấy {test_count} test cases")
         
-        # Run tests
+        # Run tests với UTF-8 encoding (Windows環境でのUnicodeエンコーディングエラーを防ぐ)
+        # Windows環境では、sys.stdoutをUTF-8でエンコードする必要がある
+        import io
+        if sys.platform == 'win32':
+            # Windows環境でのUnicodeエンコーディングエラーを防ぐため、stdoutをUTF-8でラップ
+            utf8_stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        else:
+            utf8_stdout = sys.stdout
+        
         runner = unittest.TextTestRunner(
             verbosity=2,
-            stream=sys.stdout,
+            stream=utf8_stdout,
             buffer=True
         )
         

@@ -23,6 +23,24 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from models.cookie_manager import CookieManager
 from ui.main_window import MainWindow
 from utils.log_helper import write_log, get_logger
+# Import Main Dashboard (FR-001)
+try:
+    from gui.main_dashboard import MainDashboard
+    from gui.download_douyin_screen import DownloadDouyinScreen
+    from gui.edit_video_screen import EditVideoScreen
+    from gui.controllers.navigation_controller import NavigationController
+    GUI_AVAILABLE = True
+except ImportError as e:
+    GUI_AVAILABLE = False
+    print(f"Warning: GUI modules not available: {e}")
+
+# Import MainWindow cũ (theo FR-001: mở trực tiếp màn hình cũ, giữ nguyên logic)
+try:
+    from ui.main_window import MainWindow as LegacyMainWindow
+    MAINWINDOW_AVAILABLE = True
+except ImportError as e:
+    MAINWINDOW_AVAILABLE = False
+    print(f"Warning: MainWindow not available: {e}")
 
 
 def setup_global_logging():
@@ -154,13 +172,42 @@ def main():
         if logger:
             write_log('INFO', function_name, "CookieManager đã được khởi tạo thành công", logger)
         
-        # Bước 4: Khởi tạo MainWindow
-        if logger:
-            write_log('INFO', function_name, "Đang khởi tạo MainWindow...", logger)
-        app = MainWindow(root, cookie_manager, logger)
-        if logger:
-            write_log('INFO', function_name, "MainWindow đã được khởi tạo thành công", logger)
-            write_log('INFO', function_name, "Ứng dụng sẵn sàng!", logger)
+        # Bước 4: Khởi tạo Main Dashboard (FR-001) hoặc MainWindow (legacy)
+        if GUI_AVAILABLE:
+            # Sử dụng Main Dashboard mới (FR-001)
+            if logger:
+                write_log('INFO', function_name, "Đang khởi tạo Main Dashboard (FR-001)...", logger)
+            
+            # Thiết lập root window cho Main Dashboard
+            root.title("Douyin Video Downloader")
+            root.geometry("800x600")
+            root.configure(bg="#f0f0f0")
+            
+            # Tạo navigation controller với home screen (theo iOS-style navigation)
+            # Home screen là MainDashboard (root của navigation stack)
+            navigation_controller = NavigationController(root, logger, home_screen_name="MainDashboard")
+            
+            # Đăng ký screens (theo FR-001: hệ thống dễ dàng mở rộng)
+            # Đăng ký MainWindow cũ (theo FR-001: mở trực tiếp màn hình cũ, giữ nguyên logic)
+            if MAINWINDOW_AVAILABLE:
+                navigation_controller.register_screen("MainWindow", LegacyMainWindow)
+            navigation_controller.register_screen("EditVideoScreen", EditVideoScreen)
+            
+            # Tạo Main Dashboard với cookie_manager (theo FR-001: cần cho MainWindow)
+            dashboard = MainDashboard(root, navigation_controller, logger, cookie_manager)
+            dashboard.show()
+            
+            if logger:
+                write_log('INFO', function_name, "Main Dashboard đã được khởi tạo thành công (FR-001)", logger)
+                write_log('INFO', function_name, "Ứng dụng sẵn sàng!", logger)
+        else:
+            # Fallback to legacy MainWindow
+            if logger:
+                write_log('INFO', function_name, "Đang khởi tạo MainWindow (legacy)...", logger)
+            app = MainWindow(root, cookie_manager, logger)
+            if logger:
+                write_log('INFO', function_name, "MainWindow đã được khởi tạo thành công", logger)
+                write_log('INFO', function_name, "Ứng dụng sẵn sàng!", logger)
         
         # Bước 5: Chạy ứng dụng
         if logger:
