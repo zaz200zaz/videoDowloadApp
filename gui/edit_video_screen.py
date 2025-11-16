@@ -53,9 +53,30 @@ class EditVideoScreen:
             self.root = parent
             
             if self._embedded_mode:
-                # Tạo main frame ngay trong parent (nhúng trong content_container của NavigationController)
-                self.frame = tk.Frame(self.root, bg="#ffffff")
-                self.frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+                # Tạo scrolled container (Canvas + Scrollbar) để hỗ trợ cuộn
+                self._scroll_wrapper = tk.Frame(self.root, bg="#ffffff")
+                self._scroll_wrapper.pack(fill=tk.BOTH, expand=True, padx=0, pady=0)
+                self._scroll_canvas = tk.Canvas(self._scroll_wrapper, highlightthickness=0, bg="#ffffff")
+                self._scroll_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+                vbar = tk.Scrollbar(self._scroll_wrapper, orient=tk.VERTICAL, command=self._scroll_canvas.yview)
+                vbar.pack(side=tk.RIGHT, fill=tk.Y)
+                self._scroll_canvas.configure(yscrollcommand=vbar.set)
+                # Inner frame
+                self.frame = tk.Frame(self._scroll_canvas, bg="#ffffff")
+                self._scroll_window = self._scroll_canvas.create_window((0, 0), window=self.frame, anchor="nw")
+                # Update scrollregion on content change
+                def _on_configure(event):
+                    try:
+                        self._scroll_canvas.configure(scrollregion=self._scroll_canvas.bbox("all"))
+                        self._scroll_canvas.itemconfigure(self._scroll_window, width=self._scroll_canvas.winfo_width())
+                    except Exception:
+                        pass
+                self.frame.bind("<Configure>", _on_configure)
+                # Mouse wheel scroll (Windows)
+                def _on_mousewheel(event):
+                    delta = int(-1 * (event.delta / 120))
+                    self._scroll_canvas.yview_scroll(delta, "units")
+                self._scroll_canvas.bind_all("<MouseWheel>", _on_mousewheel)
             else:
                 # Fallback: tạo Toplevel nếu không có frame container (giữ tương thích cũ)
                 self.window = tk.Toplevel(parent)
@@ -157,6 +178,14 @@ class EditVideoScreen:
             self.skip_existing_var = tk.BooleanVar(value=True)
             tk.Checkbutton(row5, text="Skip file đã tồn tại", variable=self.skip_existing_var, bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=10)
             
+            # Hàng 5b: Rotation
+            row5b = tk.Frame(config_frame, bg=self.frame.cget('bg'))
+            row5b.pack(fill=tk.X, pady=5)
+            tk.Label(row5b, text="Xoay (độ):", bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=5)
+            self.rotation_var = tk.IntVar(value=0)
+            tk.Scale(row5b, from_=0, to=360, orient=tk.HORIZONTAL, variable=self.rotation_var, length=200).pack(side=tk.LEFT, padx=5)
+            tk.Label(row5b, text="(0-360°)", bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=5)
+            
             # Hàng 6: Nút Start/Stop + Progress + Log
             row6 = tk.Frame(self.frame, bg=self.frame.cget('bg'))
             row6.pack(fill=tk.X, pady=10)
@@ -172,6 +201,41 @@ class EditVideoScreen:
             log_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
             self.log_text = tk.Text(log_frame, height=12)
             self.log_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+            # ========== KHU VỰC PREVIEW KÉO-THẢ (CapCut-like) ==========
+            preview_wrap = tk.LabelFrame(self.frame, text="Preview (kéo-thả để đặt vị trí)", bg=self.frame.cget('bg'))
+            preview_wrap.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            self.preview_canvas = tk.Canvas(preview_wrap, width=360, height=640, bg="#222222", highlightthickness=1, highlightbackground="#444444", cursor="hand2")
+            self.preview_canvas.pack(side=tk.LEFT, padx=10, pady=10)
+
+            # Trạng thái preview
+            self._preview_img_tk = None
+            self._bg_w = 1080
+            self._bg_h = 1920
+            self._scale = 0.333  # mặc định 360/1080
+            self._rect_id = None
+            self._rect_drag_start = (0, 0)
+            self._rect_offset = (0, 0)
+            self._handles = {}  # resize handles
+
+            # Nút cập nhật/khớp dữ liệu xem trước
+            controls_col = tk.Frame(preview_wrap, bg=self.frame.cget('bg'))
+            controls_col.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
+            tk.Button(controls_col, text="Refresh Preview", command=self._refresh_preview).pack(fill=tk.X, pady=4)
+            tk.Label(controls_col, text="Mẹo:", bg=self.frame.cget('bg'), fg="gray").pack(anchor="w", pady=(10,0))
+            tk.Label(controls_col, text="- Kéo vùng video màu xanh\n- Giá trị X,Y sẽ tự cập nhật", bg=self.frame.cget('bg'), fg="gray", justify=tk.LEFT).pack(anchor="w")
+
+            # Bind thay đổi kích thước để cập nhật preview rectangle
+            try:
+                self.size_w_var.trace_add("write", lambda *args: self._draw_video_rect())
+                self.size_h_var.trace_add("write", lambda *args: self._draw_video_rect())
+                self.pos_x_var.trace_add("write", lambda *args: self._draw_video_rect())
+                self.pos_y_var.trace_add("write", lambda *args: self._draw_video_rect())
+            except Exception:
+                pass
+
+            # Khởi tạo preview lần đầu
+            self._refresh_preview()
             
             # Close button
             close_button = tk.Button(
@@ -275,6 +339,7 @@ class EditVideoScreen:
         path = filedialog.askopenfilename(title="Chọn background", filetypes=[("Image files","*.png;*.jpg;*.jpeg")])
         if path:
             self.bg_path_var.set(path)
+            self._refresh_preview()
     
     def _choose_input_folder(self):
         from tkinter import filedialog
@@ -292,6 +357,220 @@ class EditVideoScreen:
         try:
             self.log_text.insert(tk.END, message + "\n")
             self.log_text.see(tk.END)
+        except Exception:
+            pass
+
+    # ========== PREVIEW & DRAG ==========
+    def _refresh_preview(self):
+        """Tải ảnh background và tính scale preview phù hợp, sau đó vẽ lại vùng video."""
+        # Đọc kích thước ảnh nền
+        bg_path = self.bg_path_var.get().strip()
+        self._bg_w, self._bg_h = self._read_bg_size_safe(bg_path)
+        # Tính scale để fit vào canvas (giữ tỉ lệ)
+        c_w = int(self.preview_canvas.cget("width"))
+        c_h = int(self.preview_canvas.cget("height"))
+        if self._bg_w <= 0 or self._bg_h <= 0:
+            self._bg_w, self._bg_h = 1080, 1920
+        scale_w = c_w / self._bg_w
+        scale_h = c_h / self._bg_h
+        self._scale = min(scale_w, scale_h)
+        # Vẽ background
+        self.preview_canvas.delete("all")
+        self._preview_img_tk = self._load_preview_image(bg_path, int(self._bg_w * self._scale), int(self._bg_h * self._scale))
+        if self._preview_img_tk is not None:
+            self.preview_canvas.create_image(0, 0, anchor="nw", image=self._preview_img_tk)
+        else:
+            # Nếu không có ảnh, vẽ nền xám
+            self.preview_canvas.create_rectangle(0, 0, int(self._bg_w * self._scale), int(self._bg_h * self._scale), fill="#333333", outline="")
+        # Vẽ vùng video
+        self._draw_video_rect()
+
+    def _read_bg_size_safe(self, path: str):
+        """Đọc kích thước ảnh nền. Nếu thất bại, dùng mặc định 1080x1920."""
+        try:
+            from PIL import Image  # type: ignore
+            if path and os.path.exists(path):
+                with Image.open(path) as img:
+                    return img.size
+        except Exception:
+            pass
+        return 1080, 1920
+
+    def _load_preview_image(self, path: str, px_w: int, px_h: int):
+        """Tải và resize ảnh preview nếu có Pillow, ngược lại trả None."""
+        try:
+            from PIL import Image, ImageTk  # type: ignore
+            if path and os.path.exists(path):
+                img = Image.open(path).convert("RGB")
+                img = img.resize((max(1, px_w), max(1, px_h)))
+                return ImageTk.PhotoImage(img)
+        except Exception:
+            return None
+        return None
+
+    def _draw_video_rect(self):
+        """Vẽ lại vùng video theo pos/size hiện tại lên preview (scaled)."""
+        try:
+            # Lấy pos/size thật (px) và convert sang px trên canvas
+            x = max(0, int(self.pos_x_var.get()))
+            y = max(0, int(self.pos_y_var.get()))
+            w = max(1, int(self.size_w_var.get()))
+            h = max(1, int(self.size_h_var.get()))
+            sx = int(x * self._scale)
+            sy = int(y * self._scale)
+            sw = int(w * self._scale)
+            sh = int(h * self._scale)
+
+            # Xóa rectangle cũ
+            if self._rect_id:
+                try:
+                    self.preview_canvas.delete(self._rect_id)
+                except Exception:
+                    pass
+                self._rect_id = None
+
+            # Vẽ rectangle mới (viền xanh lá, fill trong suốt)
+            self._rect_id = self.preview_canvas.create_rectangle(sx, sy, sx + sw, sy + sh, outline="#00ff88", width=2)
+
+            # Bind sự kiện kéo-thả
+            self.preview_canvas.tag_bind(self._rect_id, "<ButtonPress-1>", self._on_rect_press)
+            self.preview_canvas.tag_bind(self._rect_id, "<B1-Motion>", self._on_rect_motion)
+            self.preview_canvas.tag_bind(self._rect_id, "<ButtonRelease-1>", self._on_rect_release)
+
+            # Vẽ handles resize (4 góc)
+            for hid in self._handles.values():
+                try: self.preview_canvas.delete(hid)
+                except Exception: pass
+            self._handles.clear()
+            size_handle = 6
+            corners = {
+                "tl": (sx, sy),
+                "tr": (sx + sw, sy),
+                "bl": (sx, sy + sh),
+                "br": (sx + sw, sy + sh)
+            }
+            for key, (cx, cy) in corners.items():
+                hid = self.preview_canvas.create_rectangle(cx - size_handle, cy - size_handle, cx + size_handle, cy + size_handle, fill="#00ff88", outline="#00aa66")
+                self._handles[key] = hid
+                self.preview_canvas.tag_bind(hid, "<ButtonPress-1>", lambda e, k=key: self._on_handle_press(e, k))
+                self.preview_canvas.tag_bind(hid, "<B1-Motion>", lambda e, k=key: self._on_handle_motion(e, k))
+                self.preview_canvas.tag_bind(hid, "<ButtonRelease-1>", lambda e, k=key: self._on_handle_release(e, k))
+        except Exception:
+            pass
+
+    def _on_rect_press(self, event):
+        """Bắt đầu kéo: ghi lại offset giữa chuột và góc trên trái của rect."""
+        try:
+            if not self._rect_id:
+                return
+            x1, y1, x2, y2 = self.preview_canvas.coords(self._rect_id)
+            self._rect_offset = (event.x - x1, event.y - y1)
+            self._rect_drag_start = (x1, y1)
+        except Exception:
+            pass
+
+    def _on_rect_motion(self, event):
+        """Khi kéo: di chuyển rect theo chuột, cập nhật pos_x/pos_y (scaled back)."""
+        try:
+            if not self._rect_id:
+                return
+            offx, offy = self._rect_offset
+            # Tính vị trí mới (neo theo offset)
+            x1 = event.x - offx
+            y1 = event.y - offy
+            # Kích thước hiện tại (canvas)
+            cur = self.preview_canvas.coords(self._rect_id)
+            w = (cur[2] - cur[0]) if len(cur) >= 4 else 0
+            h = (cur[3] - cur[1]) if len(cur) >= 4 else 0
+            # Ràng buộc trong nền
+            max_w = int(self._bg_w * self._scale)
+            max_h = int(self._bg_h * self._scale)
+            x1 = max(0, min(x1, max_w - w))
+            y1 = max(0, min(y1, max_h - h))
+            # Di chuyển
+            self.preview_canvas.coords(self._rect_id, x1, y1, x1 + w, y1 + h)
+            # Cập nhật vars thật (chia cho scale)
+            nx = int(round(x1 / self._scale))
+            ny = int(round(y1 / self._scale))
+            self.pos_x_var.set(nx)
+            self.pos_y_var.set(ny)
+        except Exception:
+            pass
+
+    def _on_rect_release(self, event):
+        """Kết thúc kéo: có thể thêm log hoặc snap-to-grid sau này."""
+        try:
+            _ = event
+        except Exception:
+            pass
+
+    # ===== Resize handles =====
+    def _on_handle_press(self, event, corner_key):
+        try:
+            self._rect_drag_start = (event.x, event.y)
+        except Exception:
+            pass
+
+    def _on_handle_motion(self, event, corner_key):
+        try:
+            if not self._rect_id:
+                return
+            x1, y1, x2, y2 = self.preview_canvas.coords(self._rect_id)
+            nx, ny = event.x, event.y
+            # Cập nhật theo corner đang kéo
+            if corner_key == "tl":
+                x1, y1 = nx, ny
+            elif corner_key == "tr":
+                x2, y1 = nx, ny
+            elif corner_key == "bl":
+                x1, y2 = nx, ny
+            elif corner_key == "br":
+                x2, y2 = nx, ny
+            # Ràng buộc tối thiểu
+            min_size = 10
+            if x2 - x1 < min_size: x2 = x1 + min_size
+            if y2 - y1 < min_size: y2 = y1 + min_size
+            # Ràng buộc trong nền
+            max_w = int(self._bg_w * self._scale)
+            max_h = int(self._bg_h * self._scale)
+            x1 = max(0, min(x1, max_w - min_size))
+            y1 = max(0, min(y1, max_h - min_size))
+            x2 = max(min_size, min(x2, max_w))
+            y2 = max(min_size, min(y2, max_h))
+            # Cập nhật rect & handles
+            self.preview_canvas.coords(self._rect_id, x1, y1, x2, y2)
+            self._update_handles()
+            # Cập nhật size vars (chia scale)
+            w = int(round((x2 - x1) / self._scale))
+            h = int(round((y2 - y1) / self._scale))
+            self.size_w_var.set(w)
+            self.size_h_var.set(h)
+            # Cập nhật pos (theo góc trên trái)
+            self.pos_x_var.set(int(round(x1 / self._scale)))
+            self.pos_y_var.set(int(round(y1 / self._scale)))
+        except Exception:
+            pass
+
+    def _on_handle_release(self, event, corner_key):
+        try:
+            _ = (event, corner_key)
+        except Exception:
+            pass
+
+    def _update_handles(self):
+        try:
+            if not self._rect_id: return
+            x1, y1, x2, y2 = self.preview_canvas.coords(self._rect_id)
+            size_handle = 6
+            coords = {
+                "tl": (x1, y1),
+                "tr": (x2, y1),
+                "bl": (x1, y2),
+                "br": (x2, y2)
+            }
+            for key, hid in self._handles.items():
+                cx, cy = coords[key]
+                self.preview_canvas.coords(hid, cx - size_handle, cy - size_handle, cx + size_handle, cy + size_handle)
         except Exception:
             pass
     

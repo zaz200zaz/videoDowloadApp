@@ -5,7 +5,7 @@
     "naming_mode": "video_id",
     "max_concurrent": 3,
     "video_format": "auto",
-    "orientation_filter": "all",
+    "orientation_filter": "vertical",
     "orientation_swap": false,
     "download_timeout_seconds": 300,
     "chunk_timeout_seconds": 30,

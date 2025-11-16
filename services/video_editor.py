@@ -138,13 +138,28 @@ class VideoEditor:
 		if keep_ratio:
 			scale_filter = f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease"
 			pad_filter = f",pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:color=#{pr:02x}{pg:02x}{pb:02x}"
-			video_chain = f"[1:v]{scale_filter}{pad_filter}[vid]"
+			video_chain = f"[1:v]{scale_filter}{pad_filter}[vid0]"
 		else:
-			video_chain = f"[1:v]scale={target_w}:{target_h}:flags=bicubic[vid]"
+			video_chain = f"[1:v]scale={target_w}:{target_h}:flags=bicubic[vid0]"
+		
+		# Xoay nếu có (độ, 0..360). FFmpeg rotate dùng radian.
+		rotation_deg = 0
+		try:
+			rotation_deg = int(self._safe_get_rotation())
+		except Exception:
+			rotation_deg = 0
+		rotation_deg = max(0, min(rotation_deg, 360))
+		rotate_chain = ""
+		if rotation_deg != 0:
+			import math
+			rad = rotation_deg * math.pi / 180.0
+			rotate_chain = f";[vid0]rotate={rad}:fillcolor=#{pr:02x}{pg:02x}{pb:02x}[vid]"
+		else:
+			rotate_chain = f";[vid0]copy[vid]"
 		
 		# Overlay video đã scale/pad lên background tại (x,y)
 		# Input #0: background ảnh (loop), Input #1: video
-		filter_complex = f"{video_chain};[0:v][vid]overlay={x}:{y}:shortest=1[outv]"
+		filter_complex = f"{video_chain}{rotate_chain};[0:v][vid]overlay={x}:{y}:shortest=1[outv]"
 		
 		# Lệnh ffmpeg
 		# -loop 1 để phát background ảnh, -shortest dừng khi video kết thúc
@@ -170,6 +185,14 @@ class VideoEditor:
 		cmd_str = " ".join(shlex.quote(part) for part in cmd)
 		write_log("DEBUG", function, f"FFmpeg command: {cmd_str}", self.logger)
 		return cmd_str, os.path.dirname(os.path.abspath(output_path))
+	
+	def _safe_get_rotation(self) -> int:
+		"""
+		Lấy rotation từ biến môi trường (hoặc context khác). Mặc định 0 nếu không có.
+		Được EditService truyền qua config trong process_one.
+		"""
+		# Placeholder: giá trị này sẽ được thay thế khi gọi process_one thông qua config
+		return getattr(self, "_rotation_override", 0)
 	
 	def process_one(
 		self,
@@ -198,6 +221,12 @@ class VideoEditor:
 			pad_color = tuple(config.get("pad_color", [0, 0, 0]))  # [r,g,b]
 			bitrate = config.get("bitrate", "2500k")
 			preset = config.get("preset", "medium")
+			
+			# Lấy rotation từ config nếu có
+			try:
+				self._rotation_override = int(config.get("rotation", 0))
+			except Exception:
+				self._rotation_override = 0
 			
 			cmd_str, workdir = self.build_ffmpeg_command(
 				input_video, background_path, output_path,

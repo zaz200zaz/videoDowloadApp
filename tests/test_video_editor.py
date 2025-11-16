@@ -37,7 +37,8 @@ class TestVideoEditor(unittest.TestCase):
 			self.assertEqual((w, h), (800, 600))
 	
 	@mock.patch.object(VideoEditor, "_read_background_size", return_value=(1080, 1920))
-	def test_build_ffmpeg_command_keep_ratio(self, m_bgsize):
+	@mock.patch.object(VideoEditor, "_safe_get_rotation", return_value=45)
+	def test_build_ffmpeg_command_keep_ratio(self, m_rot, m_bgsize):
 		cmd, wd = self.editor.build_ffmpeg_command(
 			input_video="in.mp4",
 			background_path="bg.png",
@@ -52,6 +53,7 @@ class TestVideoEditor(unittest.TestCase):
 		self.assertIn("ffmpeg", cmd)
 		self.assertIn("-filter_complex", cmd)
 		self.assertIn("overlay=100:200", cmd)
+		self.assertIn("rotate=", cmd)
 		self.assertTrue(wd.endswith(os.path.dirname(os.path.abspath("out.mp4"))))
 	
 	@mock.patch.object(VideoEditor, "_read_background_size", return_value=(1080, 1920))
