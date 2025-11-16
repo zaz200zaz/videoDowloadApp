@@ -67,12 +67,49 @@ class EditService:
 		"""
 		function = "EditService.run"
 		try:
+			# Giới hạn threads theo CPU để tránh quá tải
+			try:
+				cpu_cap = max(1, (os.cpu_count() or 2) - 1)
+				orig = self.threads
+				self.threads = max(1, min(self.threads, cpu_cap))
+				if self.threads != orig:
+					write_log("INFO", function, f"Điều chỉnh threads: yêu cầu={orig}, theo CPU={cpu_cap}, sử dụng={self.threads}", self.logger)
+			except Exception:
+				pass
+
 			write_log("INFO", function, "Bắt đầu batch edit", self.logger)
+			# Ghi cấu hình tổng quan để dễ debug
+			try:
+				write_log("DEBUG", function, f"Config: keep_ratio={self.config.get('keep_ratio', True)}, "
+				         f"size={self.config.get('size')}, position={self.config.get('position')}, "
+				         f"bitrate={self.config.get('bitrate')}, preset={self.config.get('preset')}, "
+				         f"suffix={self.config.get('output_suffix', '_edited')}, "
+				         f"skip_existing={self.config.get('skip_existing', True)}", self.logger)
+				write_log("DEBUG", function, f"Paths: background={os.path.abspath(self.background_path)}, "
+				         f"input={os.path.abspath(self.input_folder)}, output={os.path.abspath(self.output_folder)}", self.logger)
+				write_log("DEBUG", function, f"Threads: {self.threads}", self.logger)
+			except Exception:
+				pass
+			
+			# Pre-check: background tồn tại (cảnh báo nhưng vẫn tiếp tục để không phá test/mocking)
+			if not os.path.exists(self.background_path):
+				write_log("WARNING", function, f"Background không tồn tại (tiếp tục chạy): {self.background_path}", self.logger)
+			# Pre-check: input_folder
+			if not os.path.isdir(self.input_folder):
+				write_log("ERROR", function, f"Thư mục nguồn không hợp lệ: {self.input_folder}", self.logger)
+				return {"total": 0, "success": 0, "failed": 0, "skipped": 0, "error": "invalid_input_folder"}
 			
 			# Scan input files
 			pattern = os.path.join(self.input_folder, "**", "*.mp4")
 			files = glob.glob(pattern, recursive=True)
 			files = [f for f in files if os.path.isfile(f)]
+			write_log("INFO", function, f"Đã quét file .mp4: {len(files)}", self.logger)
+			try:
+				head = [os.path.basename(p) for p in files[:5]]
+				if head:
+					write_log("DEBUG", function, f"Mẫu files: {head}", self.logger)
+			except Exception:
+				pass
 			
 			total = len(files)
 			if total == 0:

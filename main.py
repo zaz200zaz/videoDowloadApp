@@ -262,9 +262,9 @@ def main():
             write_log('ERROR', function_name, 
                      f"Lỗi khi khởi chạy ứng dụng: {e}", 
                      logger, exc_info=True)
-        print(f"Lỗi khi khởi chạy ứng dụng: {e}")
-        import traceback
-        traceback.print_exc()
+        else:
+            # Fallback: nếu logger chưa sẵn sàng, in tối thiểu
+            print(f"[ERROR] Lỗi khi khởi chạy ứng dụng: {e}")
         sys.exit(1)
 
 

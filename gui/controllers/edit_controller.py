@@ -41,14 +41,37 @@ class EditController:
 			if not background_path:
 				write_log("ERROR", function, "Thiếu background_path", self.logger)
 				return False
+			else:
+				try:
+					import os
+					if not os.path.exists(background_path):
+						write_log("ERROR", function, f"Background không tồn tại: {background_path}", self.logger)
+						return False
+				except Exception:
+					pass
 			
 			if not input_folder:
 				write_log("ERROR", function, "Thiếu input_folder", self.logger)
 				return False
+			else:
+				try:
+					import os
+					if not os.path.isdir(input_folder):
+						write_log("ERROR", function, f"Thư mục nguồn không hợp lệ: {input_folder}", self.logger)
+						return False
+				except Exception:
+					pass
 			
 			if not output_folder:
 				write_log("ERROR", function, "Thiếu output_folder", self.logger)
 				return False
+			else:
+				try:
+					import os
+					os.makedirs(output_folder, exist_ok=True)
+				except Exception as e:
+					write_log("ERROR", function, f"Không tạo được thư mục output: {e}", self.logger, exc_info=True)
+					return False
 			
 			self._service = EditService(
 				background_path=background_path,

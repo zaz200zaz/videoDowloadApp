@@ -15,6 +15,9 @@
     "enable_timeout_detection": true,
     "enable_auto_retry": true,
     "enable_skip_slow_videos": true,
-    "chunk_size": 8192
+    "chunk_size": 8192,
+    "edit_background_path": "C:/Users/trant/Downloads/IMG_9969.jpeg",
+    "edit_input_folder": "C:/work/git/videoDowloadApp/downloads/Unknown",
+    "edit_output_folder": "downloads/edited"
   }
 }

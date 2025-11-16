@@ -7,6 +7,8 @@ import logging
 from typing import Optional
 from functools import wraps
 from datetime import datetime
+import os
+import glob
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -163,4 +165,41 @@ def log_function_end(logger: logging.Logger, function: str, success: bool = True
     level = 'INFO' if success else 'ERROR'
     write_log(level, function, message, logger)
 
+
+def clear_logs(log_dir: str = "logs") -> int:
+    """
+    Xóa tất cả log trong thư mục log_dir (an toàn, có log chi tiết).
+    
+    Args:
+        log_dir: Thư mục chứa log (mặc định: 'logs' trong project root)
+    
+    Returns:
+        int: Số lượng file log đã xóa
+    
+    Lưu ý:
+        - Chỉ xóa file kết thúc bằng '.log'
+        - Bỏ qua lỗi từng file, ghi WARNING và tiếp tục
+    """
+    logger = get_logger("LogHelper")
+    function = "clear_logs"
+    try:
+        abs_dir = os.path.abspath(log_dir)
+        write_log("INFO", function, f"Bắt đầu xóa logs trong: {abs_dir}", logger)
+        if not os.path.isdir(abs_dir):
+            write_log("WARNING", function, f"Thư mục log không tồn tại: {abs_dir}", logger)
+            return 0
+        pattern = os.path.join(abs_dir, "*.log")
+        files = glob.glob(pattern)
+        count = 0
+        for f in files:
+            try:
+                os.remove(f)
+                count += 1
+            except Exception as e:
+                write_log("WARNING", function, f"Không thể xóa {f}: {e}", logger, exc_info=True)
+        write_log("INFO", function, f"Đã xóa {count} file log trong {abs_dir}", logger)
+        return count
+    except Exception as e:
+        write_log("ERROR", function, f"Lỗi khi xóa logs: {e}", logger, exc_info=True)
+        return 0
 

@@ -17,8 +17,10 @@ import tkinter as tk
 from tkinter import ttk
 from typing import Optional
 import logging
+import os
 from utils.log_helper import get_logger
 from gui.utils.ui_logger import log_ui_action, log_screen_navigation
+from models.cookie_manager import CookieManager
 
 
 class EditVideoScreen:
@@ -119,7 +121,23 @@ class EditVideoScreen:
             row1 = tk.Frame(config_frame, bg=self.frame.cget('bg'))
             row1.pack(fill=tk.X, pady=5)
             tk.Label(row1, text="Background (PNG/JPG):", bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=5)
-            self.bg_path_var = tk.StringVar()
+            # Load last settings từ CookieManager
+            cm = None
+            try:
+                cm = CookieManager()
+            except Exception:
+                cm = None
+            last_bg = ""
+            last_inp = "downloads"
+            last_out = "downloads/edited"
+            if cm:
+                try:
+                    last_bg = cm.get_setting("edit_background_path", "") or ""
+                    last_inp = cm.get_setting("edit_input_folder", "downloads") or "downloads"
+                    last_out = cm.get_setting("edit_output_folder", "downloads/edited") or "downloads/edited"
+                except Exception:
+                    pass
+            self.bg_path_var = tk.StringVar(value=last_bg)
             self.bg_entry = tk.Entry(row1, textvariable=self.bg_path_var, width=50)
             self.bg_entry.pack(side=tk.LEFT, padx=5)
             tk.Button(row1, text="Chọn...", command=self._choose_background).pack(side=tk.LEFT, padx=5)
@@ -127,14 +145,14 @@ class EditVideoScreen:
             row2 = tk.Frame(config_frame, bg=self.frame.cget('bg'))
             row2.pack(fill=tk.X, pady=5)
             tk.Label(row2, text="Thư mục nguồn:", bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=5)
-            self.input_folder_var = tk.StringVar(value="downloads")
+            self.input_folder_var = tk.StringVar(value=last_inp)
             tk.Entry(row2, textvariable=self.input_folder_var, width=40).pack(side=tk.LEFT, padx=5)
             tk.Button(row2, text="Chọn...", command=self._choose_input_folder).pack(side=tk.LEFT, padx=5)
             
             row3 = tk.Frame(config_frame, bg=self.frame.cget('bg'))
             row3.pack(fill=tk.X, pady=5)
             tk.Label(row3, text="Thư mục output:", bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=5)
-            self.output_folder_var = tk.StringVar(value="downloads/edited")
+            self.output_folder_var = tk.StringVar(value=last_out)
             tk.Entry(row3, textvariable=self.output_folder_var, width=40).pack(side=tk.LEFT, padx=5)
             tk.Button(row3, text="Chọn...", command=self._choose_output_folder).pack(side=tk.LEFT, padx=5)
             
@@ -155,6 +173,27 @@ class EditVideoScreen:
             
             self.keep_ratio_var = tk.BooleanVar(value=True)
             tk.Checkbutton(row4, text="Giữ tỉ lệ", variable=self.keep_ratio_var, bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=10)
+
+            # Hàng 4b: Tùy chọn thao tác preview
+            row4b = tk.Frame(config_frame, bg=self.frame.cget('bg'))
+            row4b.pack(fill=tk.X, pady=5)
+            self.ignore_scale_var = tk.BooleanVar(value=False)
+            tk.Checkbutton(row4b, text="Bỏ qua preview scale (tương tác theo pixel canvas)", variable=self.ignore_scale_var, bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=5)
+            tk.Label(row4b, text="Min size(px):", bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=(15,5))
+            self.min_size_var = tk.IntVar(value=4)
+            tk.Spinbox(row4b, from_=1, to=50, textvariable=self.min_size_var, width=5).pack(side=tk.LEFT)
+            tk.Label(row4b, text="Tốc độ resize:", bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=(15,5))
+            self.resize_speed_var = tk.IntVar(value=2)
+            tk.Scale(row4b, from_=1, to=4, orient=tk.HORIZONTAL, variable=self.resize_speed_var, length=120).pack(side=tk.LEFT)
+
+            # Hàng 4c: Tuỳ chọn Log UI
+            row4c = tk.Frame(config_frame, bg=self.frame.cget('bg'))
+            row4c.pack(fill=tk.X, pady=5)
+            self.hide_mouse_logs_var = tk.BooleanVar(value=False)
+            tk.Checkbutton(row4c, text="Ẩn log kéo chuột (drag/resize/scale) trên UI", variable=self.hide_mouse_logs_var, bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=5)
+            tk.Label(row4c, text="Giới hạn log hiển thị:", bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=(15,5))
+            self.ui_log_max_lines_var = tk.IntVar(value=2000)
+            tk.Spinbox(row4c, from_=500, to=20000, increment=500, textvariable=self.ui_log_max_lines_var, width=7).pack(side=tk.LEFT)
             
             # Hàng 5: Threads, bitrate, preset, suffix, skip
             row5 = tk.Frame(config_frame, bg=self.frame.cget('bg'))
@@ -217,20 +256,24 @@ class EditVideoScreen:
             self._rect_drag_start = (0, 0)
             self._rect_offset = (0, 0)
             self._handles = {}  # resize handles
+            self._resize_aspect = None  # aspect ratio khi bắt đầu resize
+            self._resize_orig_rect = None
+            self._resize_orig_size = None
+            self._bg_size_cache = {}
 
             # Nút cập nhật/khớp dữ liệu xem trước
             controls_col = tk.Frame(preview_wrap, bg=self.frame.cget('bg'))
             controls_col.pack(side=tk.LEFT, fill=tk.Y, padx=10, pady=10)
             tk.Button(controls_col, text="Refresh Preview", command=self._refresh_preview).pack(fill=tk.X, pady=4)
+            tk.Button(controls_col, text="Clear Logs", command=self._clear_logs_ui).pack(fill=tk.X, pady=4)
             tk.Label(controls_col, text="Mẹo:", bg=self.frame.cget('bg'), fg="gray").pack(anchor="w", pady=(10,0))
             tk.Label(controls_col, text="- Kéo vùng video màu xanh\n- Giá trị X,Y sẽ tự cập nhật", bg=self.frame.cget('bg'), fg="gray", justify=tk.LEFT).pack(anchor="w")
 
             # Bind thay đổi kích thước để cập nhật preview rectangle
             try:
+                # Chỉ redraw khi thay đổi kích thước để tránh giật khi đang kéo (pos thay đổi liên tục)
                 self.size_w_var.trace_add("write", lambda *args: self._draw_video_rect())
                 self.size_h_var.trace_add("write", lambda *args: self._draw_video_rect())
-                self.pos_x_var.trace_add("write", lambda *args: self._draw_video_rect())
-                self.pos_y_var.trace_add("write", lambda *args: self._draw_video_rect())
             except Exception:
                 pass
 
@@ -262,6 +305,27 @@ class EditVideoScreen:
                          "EditVideoScreen", "ERROR",
                          f"Error initializing Edit Video Screen: {e}")
             raise
+
+    def _after(self, delay_ms: int, callback):
+        """Helper: dùng đúng widget để schedule callback theo chế độ hiển thị."""
+        try:
+            if self._embedded_mode and hasattr(self, "root") and isinstance(self.root, tk.Misc):
+                return self.root.after(delay_ms, callback)
+            if hasattr(self, "window") and isinstance(self.window, tk.Misc):
+                return self.window.after(delay_ms, callback)
+        except Exception:
+            pass
+        # Fallback: thử frame
+        try:
+            if hasattr(self, "frame") and isinstance(self.frame, tk.Misc):
+                return self.frame.after(delay_ms, callback)
+        except Exception:
+            pass
+        # Nếu không có widget, gọi trực tiếp (tránh crash)
+        try:
+            callback()
+        except Exception:
+            pass
     
     def on_back_click(self):
         """
@@ -339,6 +403,11 @@ class EditVideoScreen:
         path = filedialog.askopenfilename(title="Chọn background", filetypes=[("Image files","*.png;*.jpg;*.jpeg")])
         if path:
             self.bg_path_var.set(path)
+            # Lưu lại chọn gần nhất
+            try:
+                CookieManager().set_setting("edit_background_path", path)
+            except Exception:
+                pass
             self._refresh_preview()
     
     def _choose_input_folder(self):
@@ -346,16 +415,38 @@ class EditVideoScreen:
         path = filedialog.askdirectory(title="Chọn thư mục nguồn", initialdir="downloads")
         if path:
             self.input_folder_var.set(path)
+            try:
+                CookieManager().set_setting("edit_input_folder", path)
+            except Exception:
+                pass
     
     def _choose_output_folder(self):
         from tkinter import filedialog
         path = filedialog.askdirectory(title="Chọn thư mục output", initialdir="downloads/edited")
         if path:
             self.output_folder_var.set(path)
+            try:
+                CookieManager().set_setting("edit_output_folder", path)
+            except Exception:
+                pass
     
     def _append_log(self, message: str):
         try:
+            # Lọc bớt log chuột nếu người dùng chọn ẩn
+            if bool(self.hide_mouse_logs_var.get()):
+                if message.startswith("[drag_move]") or message.startswith("[resize_move]") or message.startswith("[scale]"):
+                    return
             self.log_text.insert(tk.END, message + "\n")
+            # Giới hạn số dòng để tránh phình bộ nhớ/giật UI
+            try:
+                max_lines = max(500, int(self.ui_log_max_lines_var.get()))
+            except Exception:
+                max_lines = 2000
+            current = int(self.log_text.index('end-1c').split('.')[0])
+            if current > max_lines:
+                # Xoá các dòng đầu dư thừa
+                delete_to = current - max_lines
+                self.log_text.delete('1.0', f'{delete_to}.0')
             self.log_text.see(tk.END)
         except Exception:
             pass
@@ -363,8 +454,21 @@ class EditVideoScreen:
     # ========== PREVIEW & DRAG ==========
     def _refresh_preview(self):
         """Tải ảnh background và tính scale preview phù hợp, sau đó vẽ lại vùng video."""
-        # Đọc kích thước ảnh nền
         bg_path = self.bg_path_var.get().strip()
+        # Nếu chưa chọn background: dùng kích thước mặc định, vẽ nền xám, tránh log thừa
+        if not bg_path:
+            self._bg_w, self._bg_h = 1080, 1920
+            c_w = int(self.preview_canvas.cget("width"))
+            c_h = int(self.preview_canvas.cget("height"))
+            scale_w = c_w / self._bg_w
+            scale_h = c_h / self._bg_h
+            self._scale = min(scale_w, scale_h)
+            self.preview_canvas.delete("all")
+            self.preview_canvas.create_rectangle(0, 0, int(self._bg_w * self._scale), int(self._bg_h * self._scale), fill="#333333", outline="")
+            self._draw_video_rect()
+            self._append_log("Chưa chọn background - hiển thị nền xám.")
+            return
+        # Đọc kích thước ảnh nền
         self._bg_w, self._bg_h = self._read_bg_size_safe(bg_path)
         # Tính scale để fit vào canvas (giữ tỉ lệ)
         c_w = int(self.preview_canvas.cget("width"))
@@ -379,47 +483,109 @@ class EditVideoScreen:
         self._preview_img_tk = self._load_preview_image(bg_path, int(self._bg_w * self._scale), int(self._bg_h * self._scale))
         if self._preview_img_tk is not None:
             self.preview_canvas.create_image(0, 0, anchor="nw", image=self._preview_img_tk)
+            self._append_log("Đã tải background preview.")
         else:
             # Nếu không có ảnh, vẽ nền xám
             self.preview_canvas.create_rectangle(0, 0, int(self._bg_w * self._scale), int(self._bg_h * self._scale), fill="#333333", outline="")
+            self._append_log("Không thể tải background, dùng nền xám (kiểm tra Pillow hoặc định dạng ảnh).")
         # Vẽ vùng video
         self._draw_video_rect()
 
     def _read_bg_size_safe(self, path: str):
         """Đọc kích thước ảnh nền. Nếu thất bại, dùng mặc định 1080x1920."""
+        # Ưu tiên kiểm tra tồn tại file trước để thông báo đúng nguyên nhân
+        if not path:
+            # Đã xử lý riêng ở _refresh_preview để tránh log lặp
+            return 1080, 1920
+        if not os.path.exists(path):
+            self._append_log(f"File background không tồn tại: {path}")
+            return 1080, 1920
+        # Cache theo path
         try:
-            from PIL import Image  # type: ignore
-            if path and os.path.exists(path):
-                with Image.open(path) as img:
-                    return img.size
+            if path in self._bg_size_cache:
+                return self._bg_size_cache[path]
         except Exception:
             pass
+        try:
+            from PIL import Image  # type: ignore
+            try:
+                with Image.open(path) as img:
+                    size = img.size
+                    try:
+                        self._bg_size_cache[path] = size
+                    except Exception:
+                        pass
+                    return size
+            except Exception as e:
+                self._append_log(f"Lỗi đọc kích thước background bằng Pillow: {e}")
+        except Exception as e:
+            # Pillow không khả dụng hoặc lỗi import
+            self._append_log(f"Pillow không khả dụng khi đọc kích thước background: {e}")
         return 1080, 1920
 
     def _load_preview_image(self, path: str, px_w: int, px_h: int):
-        """Tải và resize ảnh preview nếu có Pillow, ngược lại trả None."""
+        """Tải và resize ảnh preview: ưu tiên Pillow; nếu không có, thử tk.PhotoImage (PNG).
+        
+        Ghi log nguyên nhân chi tiết nếu không thể tải:
+        - Pillow thiếu hoặc lỗi import
+        - File không tồn tại
+        - Định dạng không hỗ trợ khi không có Pillow (chỉ PNG hỗ trợ bởi tk.PhotoImage)
+        - Ảnh hỏng/không hợp lệ
+        """
+        # Kiểm tra đường dẫn & tồn tại file trước
+        if not path:
+            # Đã xử lý riêng ở _refresh_preview để tránh log lặp
+            return None
+        if not os.path.exists(path):
+            self._append_log(f"File background không tồn tại (preview): {path}")
+            return None
         try:
             from PIL import Image, ImageTk  # type: ignore
-            if path and os.path.exists(path):
+            try:
                 img = Image.open(path).convert("RGB")
                 img = img.resize((max(1, px_w), max(1, px_h)))
                 return ImageTk.PhotoImage(img)
-        except Exception:
-            return None
+            except Exception as e:
+                self._append_log(f"Lỗi mở/resize background bằng Pillow: {e}")
+        except Exception as e:
+            self._append_log(f"Pillow không khả dụng khi load preview: {e}")
+        # Fallback: thử với tk.PhotoImage cho PNG
+        try:
+            if not path:
+                return None
+            if not os.path.exists(path):
+                return None
+            if path.lower().endswith(".png"):
+                import tkinter as _tk
+                try:
+                    img = _tk.PhotoImage(file=path)
+                    # tk.PhotoImage không hỗ trợ resize trực tiếp; vẽ nguyên kích thước preview
+                    # Canvas sẽ vẽ ảnh tại kích thước thật; người dùng vẫn thấy được background.
+                    return img
+                except Exception as e:
+                    self._append_log(f"Lỗi load PNG bằng tk.PhotoImage: {e}")
+            else:
+                self._append_log("Pillow không khả dụng và file không phải PNG - không thể load preview.")
+        except Exception as e:
+            self._append_log(f"Lỗi fallback tk.PhotoImage: {e}")
         return None
 
     def _draw_video_rect(self):
         """Vẽ lại vùng video theo pos/size hiện tại lên preview (scaled)."""
         try:
             # Lấy pos/size thật (px) và convert sang px trên canvas
+            ignore_scale = bool(self.ignore_scale_var.get())
             x = max(0, int(self.pos_x_var.get()))
             y = max(0, int(self.pos_y_var.get()))
             w = max(1, int(self.size_w_var.get()))
             h = max(1, int(self.size_h_var.get()))
-            sx = int(x * self._scale)
-            sy = int(y * self._scale)
-            sw = int(w * self._scale)
-            sh = int(h * self._scale)
+            if ignore_scale:
+                sx, sy, sw, sh = x, y, w, h
+            else:
+                sx = int(x * self._scale)
+                sy = int(y * self._scale)
+                sw = int(w * self._scale)
+                sh = int(h * self._scale)
 
             # Xóa rectangle cũ
             if self._rect_id:
@@ -466,6 +632,13 @@ class EditVideoScreen:
             x1, y1, x2, y2 = self.preview_canvas.coords(self._rect_id)
             self._rect_offset = (event.x - x1, event.y - y1)
             self._rect_drag_start = (x1, y1)
+            # Debug log
+            try:
+                log_ui_action(self.logger, "EditVideoScreen._on_rect_press", "drag_start", "EditVideoScreen", "DEBUG",
+                              f"mouse=({event.x},{event.y}), rect_before=({int(x1)},{int(y1)},{int(x2)},{int(y2)})")
+                self._append_log(f"[drag_start] mouse=({event.x},{event.y}) rect=({int(x1)},{int(y1)},{int(x2)},{int(y2)})")
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -474,6 +647,7 @@ class EditVideoScreen:
         try:
             if not self._rect_id:
                 return
+            ignore_scale = bool(self.ignore_scale_var.get())
             offx, offy = self._rect_offset
             # Tính vị trí mới (neo theo offset)
             x1 = event.x - offx
@@ -482,6 +656,7 @@ class EditVideoScreen:
             cur = self.preview_canvas.coords(self._rect_id)
             w = (cur[2] - cur[0]) if len(cur) >= 4 else 0
             h = (cur[3] - cur[1]) if len(cur) >= 4 else 0
+            old = (cur[0], cur[1], cur[2], cur[3])
             # Ràng buộc trong nền
             max_w = int(self._bg_w * self._scale)
             max_h = int(self._bg_h * self._scale)
@@ -489,11 +664,25 @@ class EditVideoScreen:
             y1 = max(0, min(y1, max_h - h))
             # Di chuyển
             self.preview_canvas.coords(self._rect_id, x1, y1, x1 + w, y1 + h)
-            # Cập nhật vars thật (chia cho scale)
-            nx = int(round(x1 / self._scale))
-            ny = int(round(y1 / self._scale))
+            # Cập nhật vars thật (chia cho scale) - hạn chế redraw để tránh giật
+            if ignore_scale:
+                nx = int(round(x1))
+                ny = int(round(y1))
+            else:
+                nx = int(round(x1 / self._scale))
+                ny = int(round(y1 / self._scale))
+            # Tránh kích hoạt trace redraw (chỉ có trace size, pos không còn trace)
             self.pos_x_var.set(nx)
             self.pos_y_var.set(ny)
+            # Debug log
+            try:
+                newc = self.preview_canvas.coords(self._rect_id)
+                log_ui_action(self.logger, "EditVideoScreen._on_rect_motion", "drag_move", "EditVideoScreen", "DEBUG",
+                              f"mouse=({event.x},{event.y}), rect_from=({int(old[0])},{int(old[1])},{int(old[2])},{int(old[3])}) "
+                              f"to=({int(newc[0])},{int(newc[1])},{int(newc[2])},{int(newc[3])}), pos=({nx},{ny})")
+                self._append_log(f"[drag_move] mouse=({event.x},{event.y}) rect_to=({int(newc[0])},{int(newc[1])},{int(newc[2])},{int(newc[3])}) pos=({nx},{ny})")
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -508,6 +697,23 @@ class EditVideoScreen:
     def _on_handle_press(self, event, corner_key):
         try:
             self._rect_drag_start = (event.x, event.y)
+            # Ghi lại aspect ratio tại thời điểm bắt đầu resize để giữ tỷ lệ ổn định
+            if self._rect_id:
+                x1, y1, x2, y2 = self.preview_canvas.coords(self._rect_id)
+                w = max(1, (x2 - x1))
+                h = max(1, (y2 - y1))
+                self._resize_aspect = w / h if h != 0 else None
+                # Lưu rect/size gốc để so sánh và tính scale theo gốc
+                self._resize_orig_rect = (x1, y1, x2, y2)
+                self._resize_orig_size = (w, h)
+                # Debug log
+                try:
+                    log_ui_action(self.logger, "EditVideoScreen._on_handle_press", "resize_start", "EditVideoScreen", "DEBUG",
+                                  f"corner={corner_key}, mouse=({event.x},{event.y}), rect=({int(x1)},{int(y1)},{int(x2)},{int(y2)}), "
+                                  f"w={int(w)}, h={int(h)}, aspect={self._resize_aspect}")
+                    self._append_log(f"[resize_start] corner={corner_key} mouse=({event.x},{event.y}) rect=({int(x1)},{int(y1)},{int(x2)},{int(y2)}) size=({int(w)}x{int(h)})")
+                except Exception:
+                    pass
         except Exception:
             pass
 
@@ -515,7 +721,17 @@ class EditVideoScreen:
         try:
             if not self._rect_id:
                 return
+            ignore_scale = bool(getattr(self, "ignore_scale_var", tk.BooleanVar(value=False)).get())
             x1, y1, x2, y2 = self.preview_canvas.coords(self._rect_id)
+            orig = (x1, y1, x2, y2)
+            # Log pre-state
+            try:
+                ox1, oy1, ox2, oy2 = self._resize_orig_rect if hasattr(self, "_resize_orig_rect") else orig
+                ow = int(ox2 - ox1)
+                oh = int(oy2 - oy1)
+                self._append_log(f"[pre] corner={corner_key} mouse=({event.x},{event.y}) orig_rect=({int(ox1)},{int(oy1)},{int(ox2)},{int(oy2)}) orig_size=({ow}x{oh}) keep_ratio={bool(self.keep_ratio_var.get())}")
+            except Exception:
+                pass
             nx, ny = event.x, event.y
             # Cập nhật theo corner đang kéo
             if corner_key == "tl":
@@ -527,7 +743,7 @@ class EditVideoScreen:
             elif corner_key == "br":
                 x2, y2 = nx, ny
             # Ràng buộc tối thiểu
-            min_size = 10
+            min_size = max(1, int(getattr(self, "min_size_var", tk.IntVar(value=4)).get()))
             if x2 - x1 < min_size: x2 = x1 + min_size
             if y2 - y1 < min_size: y2 = y1 + min_size
             # Ràng buộc trong nền
@@ -537,17 +753,180 @@ class EditVideoScreen:
             y1 = max(0, min(y1, max_h - min_size))
             x2 = max(min_size, min(x2, max_w))
             y2 = max(min_size, min(y2, max_h))
+            # Log sau clamp lần 1
+            try:
+                self._append_log(f"[pre_clamp] rect_raw_to=({int(x1)},{int(y1)},{int(x2)},{int(y2)}) size_raw=({int(x2-x1)}x{int(y2-y1)})")
+            except Exception:
+                pass
+            # Giữ tỷ lệ nếu được bật
+            try:
+                keep_ratio = bool(self.keep_ratio_var.get())
+            except Exception:
+                keep_ratio = False
+            applied_ratio = False
+            if keep_ratio and self._resize_aspect:
+                # Tính width/height hiện tại dựa trên rect gốc (tránh dùng giá trị đã cập nhật)
+                ox1, oy1, ox2, oy2 = orig
+                cur_w = max(min_size, ox2 - ox1)
+                cur_h = max(min_size, oy2 - oy1)
+                aspect = self._resize_aspect if self._resize_aspect > 0 else (cur_w / cur_h if cur_h else 1.0)
+
+                # Gốc neo theo corner để giữ đúng điểm đối diện
+                if corner_key == "tl":
+                    # mong muốn theo chuột
+                    raw_w = max(min_size, ox2 - nx)
+                    raw_h = max(min_size, oy2 - ny)
+                    scale_w = raw_w / cur_w
+                    scale_h = raw_h / cur_h
+                    s = min(scale_w, scale_h)
+                    s_raw = s
+                    try:
+                        m = int(getattr(self, "resize_speed_var", tk.IntVar(value=2)).get())
+                        if s < 1.0:
+                            s = max(0.01, 1.0 - (1.0 - s) * m)
+                        else:
+                            s = 1.0 + (s - 1.0) * m
+                    except Exception:
+                        m = 1
+                    new_w = max(min_size, int(round(cur_w * s)))
+                    new_h = max(min_size, int(round(new_w / aspect)))
+                    x1 = ox2 - new_w
+                    y1 = oy2 - new_h
+                elif corner_key == "tr":
+                    raw_w = max(min_size, nx - ox1)
+                    raw_h = max(min_size, oy2 - ny)
+                    scale_w = raw_w / cur_w
+                    scale_h = raw_h / cur_h
+                    s = min(scale_w, scale_h)
+                    s_raw = s
+                    try:
+                        m = int(getattr(self, "resize_speed_var", tk.IntVar(value=2)).get())
+                        if s < 1.0:
+                            s = max(0.01, 1.0 - (1.0 - s) * m)
+                        else:
+                            s = 1.0 + (s - 1.0) * m
+                    except Exception:
+                        m = 1
+                    new_w = max(min_size, int(round(cur_w * s)))
+                    new_h = max(min_size, int(round(new_w / aspect)))
+                    x2 = ox1 + new_w
+                    y1 = oy2 - new_h
+                elif corner_key == "bl":
+                    raw_w = max(min_size, ox2 - nx)
+                    raw_h = max(min_size, ny - oy1)
+                    scale_w = raw_w / cur_w
+                    scale_h = raw_h / cur_h
+                    s = min(scale_w, scale_h)
+                    s_raw = s
+                    try:
+                        m = int(getattr(self, "resize_speed_var", tk.IntVar(value=2)).get())
+                        if s < 1.0:
+                            s = max(0.01, 1.0 - (1.0 - s) * m)
+                        else:
+                            s = 1.0 + (s - 1.0) * m
+                    except Exception:
+                        m = 1
+                    new_w = max(min_size, int(round(cur_w * s)))
+                    new_h = max(min_size, int(round(new_w / aspect)))
+                    x1 = ox2 - new_w
+                    y2 = oy1 + new_h
+                else:  # "br"
+                    raw_w = max(min_size, nx - ox1)
+                    raw_h = max(min_size, ny - oy1)
+                    scale_w = raw_w / cur_w
+                    scale_h = raw_h / cur_h
+                    s = min(scale_w, scale_h)
+                    s_raw = s
+                    try:
+                        m = int(getattr(self, "resize_speed_var", tk.IntVar(value=2)).get())
+                        if s < 1.0:
+                            s = max(0.01, 1.0 - (1.0 - s) * m)
+                        else:
+                            s = 1.0 + (s - 1.0) * m
+                    except Exception:
+                        m = 1
+                    new_w = max(min_size, int(round(cur_w * s)))
+                    new_h = max(min_size, int(round(new_w / aspect)))
+                    x2 = ox1 + new_w
+                    y2 = oy1 + new_h
+
+                # Giới hạn trong nền
+                x1 = max(0, min(x1, max_w - min_size))
+                y1 = max(0, min(y1, max_h - min_size))
+                x2 = max(min_size, min(x2, max_w))
+                y2 = max(min_size, min(y2, max_h))
+                applied_ratio = True
+                # Log nội bộ giữ tỷ lệ
+                try:
+                    self._append_log(f"[ratio] corner={corner_key} cur=({int(cur_w)}x{int(cur_h)}) "
+                                     f"raw=({int(raw_w)}x{int(raw_h)}) s={s:.3f} new=({new_w}x{new_h}) [speed m={m} s_raw={s_raw:.3f}]")
+                except Exception:
+                    pass
+            else:
+                # Log khi không áp dụng ratio
+                try:
+                    self._append_log(f"[ratio_skip] keep_ratio={keep_ratio} aspect={self._resize_aspect}")
+                except Exception:
+                    pass
+
+            # Log scale và clamp thông tin
+            try:
+                self._append_log(f"[scale] self._scale={self._scale:.6f} canvas_rect_to=({int(x1)},{int(y1)},{int(x2)},{int(y2)}) "
+                                 f"bg_scaled=({max_w}x{max_h}) min_size={min_size}")
+            except Exception:
+                pass
+            # Log áp dụng trước/sau theo world/canvas
+            try:
+                px_before = self._resize_orig_size if hasattr(self, "_resize_orig_size") else (orig[2] - orig[0], orig[3] - orig[1])
+                pw0, ph0 = int(px_before[0]), int(px_before[1])
+                ww0 = int(round(pw0 / max(self._scale, 1e-6)))
+                wh0 = int(round(ph0 / max(self._scale, 1e-6)))
+                pw1 = int(x2 - x1)
+                ph1 = int(y2 - y1)
+                ww1 = int(round(pw1 / max(self._scale, 1e-6)))
+                wh1 = int(round(ph1 / max(self._scale, 1e-6)))
+                self._append_log(f"[resize_apply] corner={corner_key} px_before=({pw0}x{ph0}) px_after=({pw1}x{ph1}) world_before=({ww0}x{wh0}) world_after=({ww1}x{wh1}) applied_ratio={applied_ratio}")
+            except Exception:
+                pass
             # Cập nhật rect & handles
             self.preview_canvas.coords(self._rect_id, x1, y1, x2, y2)
             self._update_handles()
             # Cập nhật size vars (chia scale)
-            w = int(round((x2 - x1) / self._scale))
-            h = int(round((y2 - y1) / self._scale))
+            if ignore_scale:
+                w = int(round((x2 - x1)))
+                h = int(round((y2 - y1)))
+            else:
+                w = int(round((x2 - x1) / self._scale))
+                h = int(round((y2 - y1) / self._scale))
             self.size_w_var.set(w)
             self.size_h_var.set(h)
             # Cập nhật pos (theo góc trên trái)
-            self.pos_x_var.set(int(round(x1 / self._scale)))
-            self.pos_y_var.set(int(round(y1 / self._scale)))
+            if ignore_scale:
+                self.pos_x_var.set(int(round(x1)))
+                self.pos_y_var.set(int(round(y1)))
+            else:
+                self.pos_x_var.set(int(round(x1 / self._scale)))
+                self.pos_y_var.set(int(round(y1 / self._scale)))
+            # Debug log
+            try:
+                log_ui_action(self.logger, "EditVideoScreen._on_handle_motion", "resize_move", "EditVideoScreen", "DEBUG",
+                              f"corner={corner_key}, mouse_from=({int(self._rect_drag_start[0])},{int(self._rect_drag_start[1])}) "
+                              f"to=({event.x},{event.y}), rect_from=({int(orig[0])},{int(orig[1])},{int(orig[2])},{int(orig[3])}) "
+                              f"to=({int(x1)},{int(y1)},{int(x2)},{int(y2)}), size=({w},{h}), keep_ratio={keep_ratio}, "
+                              f"ratio_applied={applied_ratio}")
+                self._append_log(f"[resize_move] corner={corner_key} mouse=({event.x},{event.y}) rect_to=({int(x1)},{int(y1)},{int(x2)},{int(y2)}) size=({w}x{h}) keep_ratio={keep_ratio} applied={applied_ratio}")
+                # No-change lý do
+                if ww0 == ww1 and wh0 == wh1:
+                    reason = []
+                    if not keep_ratio:
+                        reason.append("keep_ratio=False")
+                    if (x1 <= 0 or y1 <= 0 or x2 >= max_w or y2 >= max_h):
+                        reason.append("hit_boundary")
+                    if (x2 - x1) <= min_size or (y2 - y1) <= min_size:
+                        reason.append("min_size")
+                    self._append_log(f"[resize_nochange] reason={','.join(reason) if reason else 'unknown'}")
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -585,10 +964,27 @@ class EditVideoScreen:
         inp = self.input_folder_var.get().strip() or "downloads"
         out = self.output_folder_var.get().strip() or os.path.join("downloads","edited")
         threads = int(self.threads_var.get())
-        
+
+        # Nếu người dùng bật bỏ qua scale trong preview, quy đổi về thông số thật trước khi gửi xuống service
+        ignore_scale = bool(getattr(self, "ignore_scale_var", tk.BooleanVar(value=False)).get())
+        if ignore_scale:
+            px_x = int(self.pos_x_var.get())
+            px_y = int(self.pos_y_var.get())
+            px_w = int(self.size_w_var.get())
+            px_h = int(self.size_h_var.get())
+            world_x = int(round(px_x / max(self._scale, 1e-6)))
+            world_y = int(round(px_y / max(self._scale, 1e-6)))
+            world_w = int(round(px_w / max(self._scale, 1e-6)))
+            world_h = int(round(px_h / max(self._scale, 1e-6)))
+        else:
+            world_x = int(self.pos_x_var.get())
+            world_y = int(self.pos_y_var.get())
+            world_w = int(self.size_w_var.get())
+            world_h = int(self.size_h_var.get())
+
         config = {
-            "position": {"x": int(self.pos_x_var.get()), "y": int(self.pos_y_var.get())},
-            "size": {"width": int(self.size_w_var.get()), "height": int(self.size_h_var.get())},
+            "position": {"x": world_x, "y": world_y},
+            "size": {"width": world_w, "height": world_h},
             "keep_ratio": bool(self.keep_ratio_var.get()),
             "pad_color": [0,0,0],
             "bitrate": self.bitrate_var.get().strip() or "2500k",
@@ -601,14 +997,14 @@ class EditVideoScreen:
             self._controller = EditController()
         
         def on_progress(progress: float, current: int, total: int, message: str):
-            self.window.after(0, lambda: self._on_progress_ui(progress, current, total, message))
+            self._after(0, lambda: self._on_progress_ui(progress, current, total, message))
         
         def on_result(res: dict):
             msg = f"{'✓' if res.get('success') else '✗'} {os.path.basename(res.get('input',''))} -> {res.get('output') or res.get('error')}"
-            self.window.after(0, lambda: self._append_log(msg))
+            self._after(0, lambda: self._append_log(msg))
         
         def on_complete():
-            self.window.after(0, lambda: self._append_log("Hoàn tất batch!"))
+            self._after(0, lambda: self._append_log("Hoàn tất batch!"))
         
         ok = self._controller.start_batch(
             background_path=bg, input_folder=inp, output_folder=out,
@@ -617,6 +1013,21 @@ class EditVideoScreen:
         )
         if not ok:
             self._append_log("✗ Không thể khởi chạy batch (kiểm tra cấu hình).")
+        else:
+            # Lưu lại paths đã dùng khi start
+            try:
+                cm2 = CookieManager()
+                cm2.set_setting("edit_background_path", bg)
+                cm2.set_setting("edit_input_folder", inp)
+                cm2.set_setting("edit_output_folder", out)
+            except Exception:
+                pass
+        # Ghi chú nếu bỏ qua scale
+        try:
+            if ignore_scale:
+                self._append_log("[note] Bỏ qua preview scale đang bật: đang hiển thị theo pixel canvas, hệ thống đã quy đổi về kích thước thật khi xuất.")
+        except Exception:
+            pass
     
     def _on_progress_ui(self, progress: float, current: int, total: int, message: str):
         try:
@@ -629,4 +1040,13 @@ class EditVideoScreen:
         if hasattr(self, "_controller"):
             self._controller.stop_batch()
             self._append_log("Đã gửi tín hiệu dừng batch.")
+
+    def _clear_logs_ui(self):
+        """Xóa toàn bộ file log và ghi lại kết quả vào khung log UI."""
+        try:
+            from utils.log_helper import clear_logs
+            deleted = clear_logs("logs")
+            self._append_log(f"Đã xóa {deleted} file log trong thư mục logs.")
+        except Exception as e:
+            self._append_log(f"Lỗi khi xóa logs: {e}")
 

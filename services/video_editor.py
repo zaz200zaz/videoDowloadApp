@@ -53,6 +53,14 @@ class VideoEditor:
 			path = shutil.which("ffmpeg")
 			if path:
 				write_log("DEBUG", function, f"ffmpeg found: {path}", self.logger)
+				# Thử ghi phiên bản ffmpeg để hỗ trợ debug
+				try:
+					proc = subprocess.run([path, "-version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="ignore")
+					first_line = (proc.stdout or "").splitlines()[0] if proc and proc.stdout else ""
+					if first_line:
+						write_log("DEBUG", function, f"ffmpeg version: {first_line}", self.logger)
+				except Exception:
+					pass
 				return True, None
 			write_log("ERROR", function, "ffmpeg không tìm thấy trong PATH", self.logger)
 			return False, "ffmpeg không tìm thấy trong PATH"
@@ -126,20 +134,27 @@ class VideoEditor:
 		bg_w, bg_h = self._read_background_size(background_path)
 		target_w = max(1, int(size.get("width", bg_w)))
 		target_h = max(1, int(size.get("height", bg_h)))
+		# Đảm bảo kích thước mục tiêu là số chẵn (yuv420p yêu cầu even)
+		if target_w % 2 != 0:
+			target_w += 1
+		if target_h % 2 != 0:
+			target_h += 1
 		x = max(0, int(position.get("x", 0)))
 		y = max(0, int(position.get("y", 0)))
 		pr = max(0, int(pad_color[0]))
 		pg = max(0, int(pad_color[1]))
 		pb = max(0, int(pad_color[2]))
 		
-		# Filter để scale và pad video đến kích thước mục tiêu
+		# Filter để scale và pad video đến kích thước mục tiêu (đảm bảo even)
 		# Nếu keep_ratio: dùng scale với force_original_aspect_ratio=decrease, sau đó pad đến target_w/target_h
 		# Nếu không: scale trực tiếp về target_w x target_h
 		if keep_ratio:
 			scale_filter = f"scale={target_w}:{target_h}:force_original_aspect_ratio=decrease"
+			# Sau scale, pad về kích thước target và ép even bằng chính target đã làm chẵn
 			pad_filter = f",pad={target_w}:{target_h}:(ow-iw)/2:(oh-ih)/2:color=#{pr:02x}{pg:02x}{pb:02x}"
 			video_chain = f"[1:v]{scale_filter}{pad_filter}[vid0]"
 		else:
+			# Trực tiếp scale về target (đã chẵn)
 			video_chain = f"[1:v]scale={target_w}:{target_h}:flags=bicubic[vid0]"
 		
 		# Xoay nếu có (độ, 0..360). FFmpeg rotate dùng radian.
@@ -157,13 +172,20 @@ class VideoEditor:
 		else:
 			rotate_chain = f";[vid0]copy[vid]"
 		
+		# Chuỗi background: ép kích thước nền là số chẵn để tránh lỗi yuv420p
+		# Dùng pad để tránh resample ảnh nền (nếu đã chẵn, pad 0)
+		bg_chain = f"[0:v]pad=ceil(iw/2)*2:ceil(ih/2)*2:0:0:color=#{pr:02x}{pg:02x}{pb:02x}[bg]"
+
 		# Overlay video đã scale/pad lên background tại (x,y)
 		# Input #0: background ảnh (loop), Input #1: video
-		filter_complex = f"{video_chain}{rotate_chain};[0:v][vid]overlay={x}:{y}:shortest=1[outv]"
+		filter_complex = f"{video_chain}{rotate_chain};{bg_chain};[bg][vid]overlay={x}:{y}:shortest=1[outv]"
 		
 		# Lệnh ffmpeg
 		# -loop 1 để phát background ảnh, -shortest dừng khi video kết thúc
 		# -map [outv] -map 1:a? để audio từ video nguồn (nếu có)
+		output_abs = os.path.abspath(output_path)
+		output_dir = os.path.dirname(output_abs)
+		output_name = os.path.basename(output_abs)
 		cmd = [
 			"ffmpeg",
 			"-y",
@@ -179,12 +201,18 @@ class VideoEditor:
 			"-pix_fmt", "yuv420p",
 			"-c:a", "aac",
 			"-shortest",
-			output_path
+			output_name
 		]
 		
-		cmd_str = " ".join(shlex.quote(part) for part in cmd)
-		write_log("DEBUG", function, f"FFmpeg command: {cmd_str}", self.logger)
-		return cmd_str, os.path.dirname(os.path.abspath(output_path))
+		# Log dạng chuỗi chỉ để debug (không dùng khi thực thi để tránh lỗi quote trên Windows)
+		try:
+			debug_str = " ".join(shlex.quote(part) for part in cmd)
+		except Exception:
+			debug_str = " ".join(cmd)
+		write_log("DEBUG", function, f"FFmpeg command: {debug_str}", self.logger)
+		# Lưu lại dạng list để thực thi an toàn (Windows shell quoting)
+		self._last_cmd_list = cmd
+		return debug_str, output_dir
 	
 	def _safe_get_rotation(self) -> int:
 		"""
@@ -233,11 +261,15 @@ class VideoEditor:
 				position, size, keep_ratio, pad_color, bitrate, preset
 			)
 			
-			os.makedirs(os.path.dirname(output_path), exist_ok=True)
+			# Đảm bảo thư mục output tồn tại (dùng absolute để nhất quán với workdir)
+			out_abs = os.path.abspath(output_path)
+			os.makedirs(os.path.dirname(out_abs), exist_ok=True)
 			
 			# Thực thi FFmpeg
+			# Ưu tiên chạy dạng list (an toàn trên Windows); fallback chuỗi nếu không có
+			cmd_list = getattr(self, "_last_cmd_list", None)
 			proc = subprocess.run(
-				cmd_str, shell=True, cwd=workdir,
+				cmd_list if isinstance(cmd_list, list) else cmd_str, shell=False, cwd=workdir,
 				stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="ignore"
 			)
 			if proc.returncode != 0:
@@ -246,13 +278,13 @@ class VideoEditor:
 				write_log("ERROR", function, f"FFmpeg failed (code={proc.returncode}). Stderr: {stderr_snippet}", self.logger)
 				# Retry một lần theo yêu cầu
 				proc2 = subprocess.run(
-					cmd_str, shell=True, cwd=workdir,
+					cmd_list if isinstance(cmd_list, list) else cmd_str, shell=False, cwd=workdir,
 					stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="ignore"
 				)
 				if proc2.returncode != 0:
 					stderr_snippet2 = (proc2.stderr or "")[-400:]
 					write_log("ERROR", function, f"FFmpeg retry failed (code={proc2.returncode}). Stderr: {stderr_snippet2}", self.logger)
-					return {"success": False, "error": "FFmpeg failed", "input": input_video, "output": None}
+					return {"success": False, "error": f"FFmpeg failed: {stderr_snippet2}", "input": input_video, "output": None}
 			
 			if not os.path.exists(output_path):
 				write_log("ERROR", function, "Output file không tồn tại sau khi FFmpeg chạy", self.logger)
