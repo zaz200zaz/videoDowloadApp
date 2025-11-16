@@ -18,6 +18,14 @@
     "chunk_size": 8192,
     "edit_background_path": "C:/Users/trant/Downloads/IMG_9969.jpeg",
     "edit_input_folder": "C:/work/git/videoDowloadApp/downloads/Unknown",
-    "edit_output_folder": "downloads/edited"
+    "edit_output_folder": "downloads/edited",
+    "edit_pos_x": 233,
+    "edit_pos_y": 320,
+    "edit_width": 540,
+    "edit_height": 255,
+    "edit_keep_ratio": true,
+    "edit_ignore_scale": false,
+    "edit_min_size": 4,
+    "edit_resize_speed": 2
   }
 }

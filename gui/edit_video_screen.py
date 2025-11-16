@@ -87,22 +87,21 @@ class EditVideoScreen:
                 self.frame = tk.Frame(self.window, bg="#ffffff")
                 self.frame.pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
             
-            # Back button frame (iOS-style navigation)
-            back_frame = tk.Frame(self.frame, bg=self.frame.cget('bg'))
-            back_frame.pack(fill=tk.X, pady=10)
-            
-            # Back button (iOS-style)
-            back_button = tk.Button(
-                back_frame,
-                text="← Back to Home",
-                command=self.on_back_click,
-                width=20,
-                height=2,
-                bg="#f0f0f0",
-                relief=tk.FLAT,
-                cursor="hand2"
-            )
-            back_button.pack(side=tk.LEFT, padx=10)
+            # Back button (iOS-style) - chỉ hiển thị ở chế độ window để tránh trùng với back của container
+            if not self._embedded_mode:
+                back_frame = tk.Frame(self.frame, bg=self.frame.cget('bg'))
+                back_frame.pack(fill=tk.X, pady=10)
+                back_button = tk.Button(
+                    back_frame,
+                    text="← Back to Home",
+                    command=self.on_back_click,
+                    width=20,
+                    height=2,
+                    bg="#f0f0f0",
+                    relief=tk.FLAT,
+                    cursor="hand2"
+                )
+                back_button.pack(side=tk.LEFT, padx=10)
             
             # Title label
             title_label = tk.Label(
@@ -130,11 +129,27 @@ class EditVideoScreen:
             last_bg = ""
             last_inp = "downloads"
             last_out = "downloads/edited"
+            last_pos_x = 100
+            last_pos_y = 200
+            last_w = 720
+            last_h = 1280
+            last_keep = True
+            last_ignore_scale = False
+            last_min_size = 4
+            last_speed = 2
             if cm:
                 try:
                     last_bg = cm.get_setting("edit_background_path", "") or ""
                     last_inp = cm.get_setting("edit_input_folder", "downloads") or "downloads"
                     last_out = cm.get_setting("edit_output_folder", "downloads/edited") or "downloads/edited"
+                    last_pos_x = int(cm.get_setting("edit_pos_x", 100) or 100)
+                    last_pos_y = int(cm.get_setting("edit_pos_y", 200) or 200)
+                    last_w = int(cm.get_setting("edit_width", 720) or 720)
+                    last_h = int(cm.get_setting("edit_height", 1280) or 1280)
+                    last_keep = bool(cm.get_setting("edit_keep_ratio", True))
+                    last_ignore_scale = bool(cm.get_setting("edit_ignore_scale", False))
+                    last_min_size = int(cm.get_setting("edit_min_size", 4) or 4)
+                    last_speed = int(cm.get_setting("edit_resize_speed", 2) or 2)
                 except Exception:
                     pass
             self.bg_path_var = tk.StringVar(value=last_bg)
@@ -160,30 +175,30 @@ class EditVideoScreen:
             row4 = tk.Frame(config_frame, bg=self.frame.cget('bg'))
             row4.pack(fill=tk.X, pady=5)
             tk.Label(row4, text="Vị trí (x,y):", bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=5)
-            self.pos_x_var = tk.IntVar(value=100)
-            self.pos_y_var = tk.IntVar(value=200)
+            self.pos_x_var = tk.IntVar(value=last_pos_x)
+            self.pos_y_var = tk.IntVar(value=last_pos_y)
             tk.Entry(row4, textvariable=self.pos_x_var, width=6).pack(side=tk.LEFT, padx=2)
             tk.Entry(row4, textvariable=self.pos_y_var, width=6).pack(side=tk.LEFT, padx=2)
             
             tk.Label(row4, text="Kích thước (w,h):", bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=10)
-            self.size_w_var = tk.IntVar(value=720)
-            self.size_h_var = tk.IntVar(value=1280)
+            self.size_w_var = tk.IntVar(value=last_w)
+            self.size_h_var = tk.IntVar(value=last_h)
             tk.Entry(row4, textvariable=self.size_w_var, width=6).pack(side=tk.LEFT, padx=2)
             tk.Entry(row4, textvariable=self.size_h_var, width=6).pack(side=tk.LEFT, padx=2)
             
-            self.keep_ratio_var = tk.BooleanVar(value=True)
+            self.keep_ratio_var = tk.BooleanVar(value=last_keep)
             tk.Checkbutton(row4, text="Giữ tỉ lệ", variable=self.keep_ratio_var, bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=10)
 
             # Hàng 4b: Tùy chọn thao tác preview
             row4b = tk.Frame(config_frame, bg=self.frame.cget('bg'))
             row4b.pack(fill=tk.X, pady=5)
-            self.ignore_scale_var = tk.BooleanVar(value=False)
+            self.ignore_scale_var = tk.BooleanVar(value=last_ignore_scale)
             tk.Checkbutton(row4b, text="Bỏ qua preview scale (tương tác theo pixel canvas)", variable=self.ignore_scale_var, bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=5)
             tk.Label(row4b, text="Min size(px):", bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=(15,5))
-            self.min_size_var = tk.IntVar(value=4)
+            self.min_size_var = tk.IntVar(value=last_min_size)
             tk.Spinbox(row4b, from_=1, to=50, textvariable=self.min_size_var, width=5).pack(side=tk.LEFT)
             tk.Label(row4b, text="Tốc độ resize:", bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=(15,5))
-            self.resize_speed_var = tk.IntVar(value=2)
+            self.resize_speed_var = tk.IntVar(value=last_speed)
             tk.Scale(row4b, from_=1, to=4, orient=tk.HORIZONTAL, variable=self.resize_speed_var, length=120).pack(side=tk.LEFT)
 
             # Hàng 4c: Tuỳ chọn Log UI
@@ -274,21 +289,44 @@ class EditVideoScreen:
                 # Chỉ redraw khi thay đổi kích thước để tránh giật khi đang kéo (pos thay đổi liên tục)
                 self.size_w_var.trace_add("write", lambda *args: self._draw_video_rect())
                 self.size_h_var.trace_add("write", lambda *args: self._draw_video_rect())
+                # Lưu pos/size khi người dùng chỉnh trong entry
+                def _persist_vars(*_):
+                    try:
+                        cmx = CookieManager()
+                        cmx.set_setting("edit_pos_x", int(self.pos_x_var.get()))
+                        cmx.set_setting("edit_pos_y", int(self.pos_y_var.get()))
+                        cmx.set_setting("edit_width", int(self.size_w_var.get()))
+                        cmx.set_setting("edit_height", int(self.size_h_var.get()))
+                        cmx.set_setting("edit_keep_ratio", bool(self.keep_ratio_var.get()))
+                        cmx.set_setting("edit_ignore_scale", bool(self.ignore_scale_var.get()))
+                        cmx.set_setting("edit_min_size", int(self.min_size_var.get()))
+                        cmx.set_setting("edit_resize_speed", int(self.resize_speed_var.get()))
+                    except Exception:
+                        pass
+                self.pos_x_var.trace_add("write", _persist_vars)
+                self.pos_y_var.trace_add("write", _persist_vars)
+                self.size_w_var.trace_add("write", _persist_vars)
+                self.size_h_var.trace_add("write", _persist_vars)
+                self.keep_ratio_var.trace_add("write", _persist_vars)
+                self.ignore_scale_var.trace_add("write", _persist_vars)
+                self.min_size_var.trace_add("write", _persist_vars)
+                self.resize_speed_var.trace_add("write", _persist_vars)
             except Exception:
                 pass
 
             # Khởi tạo preview lần đầu
             self._refresh_preview()
             
-            # Close button
-            close_button = tk.Button(
-                self.frame,
-                text="Close",
-                command=self.on_close,
-                width=20,
-                height=2
-            )
-            close_button.pack(pady=20)
+            # Close button: chỉ hiển thị ở chế độ window (không nhúng)
+            if not self._embedded_mode:
+                close_button = tk.Button(
+                    self.frame,
+                    text="Close Window",
+                    command=self.on_close,
+                    width=20,
+                    height=2
+                )
+                close_button.pack(pady=20)
             
             # Bind close event nếu ở chế độ window
             if hasattr(self, "window"):
