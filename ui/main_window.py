@@ -15,7 +15,7 @@ import logging
 class MainWindow:
     """Cửa sổ chính của ứng dụng"""
     
-    def __init__(self, root: tk.Tk, cookie_manager, logger=None, navigation_controller=None):
+    def __init__(self, root: tk.Tk, cookie_manager, logger=None, navigation_controller=None, **kwargs):
         """
         Khởi tạo MainWindow
         
@@ -26,6 +26,8 @@ class MainWindow:
             navigation_controller: NavigationController instance (optional, để hỗ trợ back navigation)
         """
         self.root = root
+        # Optional container frame for mobile-mode embedding
+        self.container_frame: Optional[tk.Frame] = kwargs.get("container_frame")
         self.cookie_manager = cookie_manager
         self.logger = logger or logging.getLogger('MainWindow')
         # Lưu navigation_controller để hỗ trợ back navigation (iOS-style)
@@ -100,25 +102,76 @@ class MainWindow:
     
     def _setup_ui(self):
         """Thiết lập giao diện"""
-        self.root.title("Douyin Video Downloader")
-        self.root.geometry("800x700")
-        self.root.resizable(True, True)
+        # Only set window properties if parent is a real window (Tk/Toplevel)
+        if hasattr(self.root, "title"):
+            try:
+                self.root.title("Douyin Video Downloader")
+                self.root.geometry("800x700")
+                self.root.resizable(True, True)
+            except Exception:
+                pass
         
         # Style
         style = ttk.Style()
         style.theme_use('clam')
         
         # Container chính
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
+        parent_container = self.container_frame if isinstance(self.container_frame, tk.Frame) else self.root
+
+        # ========== SCROLLABLE CONTAINER (Canvas + Scrollbar) ==========
+        # Wrapper frame to hold canvas and scrollbar
+        scroll_wrapper = ttk.Frame(parent_container)
+        scroll_wrapper.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        try:
+            parent_container.columnconfigure(0, weight=1)
+            parent_container.rowconfigure(0, weight=1)
+            scroll_wrapper.columnconfigure(0, weight=1)
+            scroll_wrapper.rowconfigure(0, weight=1)
+        except Exception:
+            pass
+
+        # Canvas for scrolling
+        canvas_bg = "#f0f0f0"
+        canvas = tk.Canvas(scroll_wrapper, highlightthickness=0, bg=canvas_bg)
+        canvas.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        # Vertical scrollbar on the right
+        v_scrollbar = ttk.Scrollbar(scroll_wrapper, orient=tk.VERTICAL, command=canvas.yview)
+        v_scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        canvas.configure(yscrollcommand=v_scrollbar.set)
+
+        # Content frame inside canvas
+        main_frame = ttk.Frame(canvas, padding="10")
+        canvas_window = canvas.create_window((0, 0), window=main_frame, anchor="nw")
+
+        # Resize canvas scrollregion when content size changes
+        def _on_frame_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            # Keep content frame width equal to canvas width
+            try:
+                canvas.itemconfigure(canvas_window, width=canvas.winfo_width())
+            except Exception:
+                pass
+        main_frame.bind("<Configure>", _on_frame_configure)
+
+        # Ensure mouse wheel scroll works (Windows)
+        def _on_mousewheel(event):
+            # event.delta is multiples of 120 on Windows; negative means down
+            delta = int(-1 * (event.delta / 120))
+            canvas.yview_scroll(delta, "units")
+
+        # Bind mouse wheel to both canvas and content
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+
+        # Allow grid expansion inside content
         main_frame.columnconfigure(1, weight=1)
         
         # ========== BACK BUTTON (iOS-style navigation) ==========
-        # Thêm back button nếu có navigation_controller (theo iOS-style navigation)
-        # Không thay đổi logic hiện có, chỉ thêm tính năng back navigation
-        if self.navigation_controller:
+        # Chỉ hiển thị nút Back nội bộ nếu KHÔNG chạy ở mobile_mode (đã có header bar)
+        show_internal_back = bool(self.navigation_controller) and not (
+            hasattr(self.navigation_controller, "mobile_mode") and self.navigation_controller.mobile_mode
+        )
+        if show_internal_back:
             back_frame = ttk.Frame(main_frame)
             back_frame.grid(row=0, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
             back_frame.columnconfigure(0, weight=1)
@@ -164,7 +217,8 @@ class MainWindow:
         links_frame = ttk.LabelFrame(main_frame, text="2. Danh sách Link Video", padding="10")
         links_frame.grid(row=1 + row_offset, column=0, columnspan=2, sticky=(tk.W, tk.E, tk.N, tk.S), pady=5)
         links_frame.columnconfigure(0, weight=1)
-        links_frame.rowconfigure(1, weight=1, minsize=150)  # Đảm bảo có chiều cao tối thiểu
+        # Không đặt minsize để tránh hạn chế chiều cao khung con
+        links_frame.rowconfigure(1, weight=1)
         main_frame.rowconfigure(1 + row_offset, weight=1)
         
         links_buttons = ttk.Frame(links_frame)
@@ -559,7 +613,8 @@ class MainWindow:
         
         # Progress bar
         progress_var = tk.DoubleVar()
-        progress_bar = tk.ttk.Progressbar(progress_window, variable=progress_var, maximum=100, length=400, mode='indeterminate')
+        # Sửa lỗi: dùng ttk.Progressbar thay vì tk.ttk.Progressbar để tránh AttributeError
+        progress_bar = ttk.Progressbar(progress_window, variable=progress_var, maximum=100, length=400, mode='indeterminate')
         progress_bar.pack(pady=10)
         progress_bar.start(10)  # Start indeterminate progress
         

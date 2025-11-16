@@ -183,9 +183,24 @@ def main():
             root.geometry("800x600")
             root.configure(bg="#f0f0f0")
             
-            # Tạo navigation controller với home screen (theo iOS-style navigation)
-            # Home screen là MainDashboard (root của navigation stack)
-            navigation_controller = NavigationController(root, logger, home_screen_name="MainDashboard")
+            # Mobile-style layout: Header (Nav Bar) + Content Container
+            header = tk.Frame(root, bg="#ffffff", height=48)
+            header.pack(side=tk.TOP, fill=tk.X)
+            content_container = tk.Frame(root, bg="#f0f0f0")
+            content_container.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+            
+            # Header: Back button + Title
+            back_btn = tk.Button(header, text="← Back", relief=tk.FLAT, bg="#ffffff", activebackground="#f2f2f2", cursor="hand2")
+            back_btn.pack(side=tk.LEFT, padx=12, pady=8)
+            title_var = tk.StringVar(value="Home")
+            title_lbl = tk.Label(header, textvariable=title_var, bg="#ffffff", font=("Arial", 14, "bold"))
+            title_lbl.pack(side=tk.TOP, pady=8)
+            
+            # Tạo navigation controller với mobile_mode (frame-based stack)
+            navigation_controller = NavigationController(
+                root, logger, home_screen_name="MainDashboard",
+                content_container=content_container, mobile_mode=True
+            )
             
             # Đăng ký screens (theo FR-001: hệ thống dễ dàng mở rộng)
             # Đăng ký MainWindow cũ (theo FR-001: mở trực tiếp màn hình cũ, giữ nguyên logic)
@@ -193,9 +208,25 @@ def main():
                 navigation_controller.register_screen("MainWindow", LegacyMainWindow)
             navigation_controller.register_screen("EditVideoScreen", EditVideoScreen)
             
-            # Tạo Main Dashboard với cookie_manager (theo FR-001: cần cho MainWindow)
-            dashboard = MainDashboard(root, navigation_controller, logger, cookie_manager)
-            dashboard.show()
+            # Đăng ký MainDashboard làm Home
+            navigation_controller.register_screen("MainDashboard", MainDashboard)
+            
+            # Wire back button
+            def on_back():
+                if navigation_controller.go_back():
+                    # Update title based on current screen
+                    current = navigation_controller.current_screen or "MainDashboard"
+                    title_var.set("Home" if current == "MainDashboard" else ("Douyin Download" if current == "MainWindow" else current))
+            back_btn.config(command=on_back)
+
+            # Provide title update callback to navigation controller
+            def set_title(screen_name: str):
+                title_var.set("Home" if screen_name == "MainDashboard" else ("Douyin Download" if screen_name == "MainWindow" else screen_name))
+            setattr(navigation_controller, 'set_title_callback', set_title)
+            
+            # Open Home
+            navigation_controller.open_screen("MainDashboard", from_screen="App", cookie_manager=cookie_manager)
+            title_var.set("Home")
             
             if logger:
                 write_log('INFO', function_name, "Main Dashboard đã được khởi tạo thành công (FR-001)", logger)

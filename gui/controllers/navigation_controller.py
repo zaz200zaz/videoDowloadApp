@@ -39,7 +39,7 @@ class NavigationController:
         logger: Logger instance (theo System Instruction)
     """
     
-    def __init__(self, root: tk.Tk, logger: Optional[logging.Logger] = None, home_screen_name: str = "MainDashboard"):
+    def __init__(self, root: tk.Tk, logger: Optional[logging.Logger] = None, home_screen_name: str = "MainDashboard", content_container: Optional[tk.Frame] = None, mobile_mode: bool = False):
         """
         Khởi tạo NavigationController với iOS-style navigation stack
         
@@ -58,6 +58,11 @@ class NavigationController:
         self.logger = logger or get_logger('NavigationController')
         self.root = root
         self.current_screen = None
+        # Frame-based navigation (mobile mode)
+        self.content_container = content_container
+        self.mobile_mode = mobile_mode
+        # Stack of frame instances for mobile mode
+        self._frame_stack: List[tk.Frame] = []
         # Navigation stack để quản lý navigation history (iOS-style)
         # Stack chứa tên các screens theo thứ tự: [home_screen, screen1, screen2, ...]
         # Khi back, pop stack để quay lại screen trước
@@ -128,6 +133,76 @@ class NavigationController:
                             screen_name, success=True)
         
         try:
+            # Mobile mode: manage frames inside content_container
+            if self.mobile_mode and self.content_container is not None:
+                # If already exists, bring to front
+                if screen_name in self.screens and isinstance(self.screens[screen_name], tk.Frame):
+                    frame = self.screens[screen_name]
+                    for child in self.content_container.winfo_children():
+                        child.pack_forget()
+                    frame.pack(fill=tk.BOTH, expand=True)
+                    if screen_name not in self.navigation_stack:
+                        self.navigation_stack.append(screen_name)
+                    self._frame_stack.append(frame)
+                    self.current_screen = screen_name
+                    write_log('INFO', function_name, f"(Mobile) Screen {screen_name} shown", self.logger)
+                    write_log('DEBUG', function_name, f"(Mobile) Navigation stack: {self.navigation_stack}", self.logger)
+                    # Update title if callback provided
+                    try:
+                        if hasattr(self, 'set_title_callback') and callable(self.set_title_callback):
+                            self.set_title_callback(screen_name)
+                    except Exception:
+                        pass
+                    return frame
+
+                # Create new frame instance
+                if screen_name not in self.screen_classes:
+                    error_msg = f"Screen class {screen_name} not registered"
+                    write_log('WARNING', function_name, error_msg, self.logger)
+                    log_screen_navigation(self.logger, function_name, from_screen_name, screen_name, success=False, error=error_msg)
+                    return None
+
+                screen_class = self.screen_classes[screen_name]
+
+                # Special handling: MainWindow (legacy) should render into a container frame
+                is_mainwindow = (screen_name == "MainWindow" or 
+                                 screen_class.__name__ == "MainWindow" or
+                                 "MainWindow" in screen_class.__name__)
+
+                # Create a container frame for the screen
+                # Hide any currently packed children first
+                for child in self.content_container.winfo_children():
+                    child.pack_forget()
+                frame = tk.Frame(self.content_container, bg=self.content_container.cget('bg'))
+                frame.pack(fill=tk.BOTH, expand=True)
+
+                if is_mainwindow:
+                    # Render MainWindow UI into this frame (UI-only embedding)
+                    # Pass container_frame for UI building; keep logic intact
+                    screen = screen_class(frame, logger=self.logger, **{**kwargs, "container_frame": frame, "navigation_controller": self})
+                else:
+                    # Screen class is expected to accept parent as first arg
+                    screen = screen_class(frame, logger=self.logger, **{**kwargs, "navigation_controller": self})
+
+                # Store both screen object and its root frame
+                self.screens[screen_name] = frame
+                # Push to stacks
+                if screen_name not in self.navigation_stack:
+                    self.navigation_stack.append(screen_name)
+                self._frame_stack.append(frame)
+                self.current_screen = screen_name
+
+                write_log('INFO', function_name, f"(Mobile) Screen {screen_name} opened as Frame", self.logger)
+                write_log('DEBUG', function_name, f"(Mobile) Navigation stack: {self.navigation_stack}", self.logger)
+                log_screen_navigation(self.logger, function_name, from_screen_name, screen_name, success=True)
+                # Update title if callback provided
+                try:
+                    if hasattr(self, 'set_title_callback') and callable(self.set_title_callback):
+                        self.set_title_callback(screen_name)
+                except Exception:
+                    pass
+                return screen
+
             # Kiểm tra screen đã tồn tại chưa (theo FR-001: multi-screen support)
             if screen_name in self.screens:
                 screen = self.screens[screen_name]
@@ -329,6 +404,37 @@ class NavigationController:
         """
         function_name = "NavigationController.go_back"
         
+        # Mobile mode frame-based back
+        if self.mobile_mode and self.content_container is not None:
+            if len(self._frame_stack) <= 1:
+                write_log('WARNING', function_name, "(Mobile) Cannot go back: already at home screen", self.logger)
+                return False
+            try:
+                current_frame = self._frame_stack.pop()
+                # Hide current frame
+                current_frame.pack_forget()
+                # Pop logical stack
+                if len(self.navigation_stack) > 1:
+                    current_name = self.navigation_stack.pop()
+                else:
+                    current_name = self.home_screen_name
+                previous_frame = self._frame_stack[-1]
+                previous_frame.pack(fill=tk.BOTH, expand=True)
+                self.current_screen = self.navigation_stack[-1] if self.navigation_stack else self.home_screen_name
+                write_log('INFO', function_name, f"(Mobile) Back to {self.current_screen}", self.logger)
+                write_log('DEBUG', function_name, f"(Mobile) Navigation stack: {self.navigation_stack}", self.logger)
+                log_screen_navigation(self.logger, function_name, current_name, self.current_screen, success=True, action="back")
+                # Update title if callback provided
+                try:
+                    if hasattr(self, 'set_title_callback') and callable(self.set_title_callback):
+                        self.set_title_callback(self.current_screen)
+                except Exception:
+                    pass
+                return True
+            except Exception as e:
+                write_log('ERROR', function_name, f"(Mobile) Error during back navigation: {e}", self.logger, exc_info=True)
+                return False
+
         # Kiểm tra có thể back không (theo iOS-style: không back khỏi home screen)
         if len(self.navigation_stack) <= 1:
             write_log('WARNING', function_name, "Cannot go back: already at home screen", self.logger)

@@ -510,7 +510,17 @@ class CookieManager:
                     "max_concurrent": 3,
                     "video_format": "auto",
                     "orientation_filter": "all",
-                    "orientation_swap": False
+                    "orientation_swap": False,
+                    # Đồng bộ với cấu hình mặc định trong _ensure_config_exists (Timeout/Retry)
+                    "download_timeout_seconds": 300,
+                    "chunk_timeout_seconds": 30,
+                    "max_retries": 3,
+                    "retry_delay_seconds": 5,
+                    "max_download_time_seconds": 1800,
+                    "enable_timeout_detection": True,
+                    "enable_auto_retry": True,
+                    "enable_skip_slow_videos": True,
+                    "chunk_size": 8192
                 }
             }
             self._save_config(default_config)

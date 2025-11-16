@@ -12,6 +12,7 @@ from urllib.parse import urlparse, parse_qs
 import json
 import logging
 from datetime import datetime
+from services.api_client import ApiClient
 
 
 class VideoDownloader:
@@ -42,10 +43,35 @@ class VideoDownloader:
             log_file: Đường dẫn file log (nếu None, sẽ tạo file log tự động)
         """
         self.cookie = cookie
-        self.session = requests.Session()
         
         # Thiết lập logging
         self._setup_logging(log_file)
+
+        # API client chuẩn hóa HTTP (timeout/retry/logging)
+        try:
+            self.api = ApiClient(cookie=self.cookie, logger=self.logger)
+        except Exception:
+            # Fallback an toàn nếu có lỗi khởi tạo ApiClient
+            self.api = None
+        
+        # Đảm bảo self.session tồn tại cho các code đường cũ (_setup_session và chỗ khác vẫn dùng self.session)
+        # Ưu tiên dùng session từ ApiClient để thống nhất headers/adapter
+        try:
+            if self.api and hasattr(self.api, "session"):
+                self.session = self.api.session
+                self.logger.debug("[VideoDownloader.__init__] Using ApiClient.session for self.session")
+            else:
+                import requests as _requests
+                self.session = _requests.Session()
+                self.logger.debug("[VideoDownloader.__init__] Created fallback requests.Session for self.session")
+        except Exception as _e:
+            # Fallback cuối cùng, để tránh AttributeError ở _setup_session
+            import requests as _requests
+            self.session = _requests.Session()
+            try:
+                self.logger.error(f"[VideoDownloader.__init__] Failed to derive session from ApiClient: {_e}", exc_info=True)
+            except Exception:
+                pass
         
         self._setup_session()
     
@@ -280,7 +306,10 @@ class VideoDownloader:
                     # Sử dụng existing session để tái sử dụng connection pool (tối ưu network performance)
                     # Tạo session tạm thời chỉ khi cần thiết để tránh cookie conflicts
                     # (theo System Instruction 6 - tối ưu network operations)
-                    temp_session = requests.Session()
+                    # Sử dụng ApiClient tạm để tránh đụng độ cookie/session
+                    temp_client = self.api if self.api else None
+                    if temp_client is None:
+                        temp_session = requests.Session()
                     # Cấu hình connection pool để tối ưu performance (theo System Instruction 6)
                     from requests.adapters import HTTPAdapter
                     from urllib3.util.retry import Retry
@@ -308,7 +337,10 @@ class VideoDownloader:
                         "Referer": "https://www.douyin.com/",
                     })
                     # Follow redirect để lấy URL thực tế
-                    response = temp_session.get(url, allow_redirects=True, timeout=15)
+                    if temp_client:
+                        response = temp_client.get(url, timeout=15)
+                    else:
+                        response = temp_session.get(url, allow_redirects=True, timeout=15)
                     final_url = response.url
                     url = final_url
                     # Đóng session để giải phóng tài nguyên (theo System Instruction 8 - resource management)
@@ -478,7 +510,7 @@ class VideoDownloader:
                 self.log('debug', f"Cookie length: {len(self.cookie)} characters", function_name)
                 
                 try:
-                    response = self.session.get(api_url, timeout=15)
+                    response = self.api.get(api_url, timeout=15) if self.api else self.session.get(api_url, timeout=15)
                     
                     # Log API call theo System Instruction
                     self.log('debug', f"Response status: {response.status_code}", function_name)
@@ -723,7 +755,7 @@ class VideoDownloader:
         
         try:
             self.log('info', f"Đang lấy HTML từ: {url[:100]}...", function_name)
-            response = self.session.get(url, timeout=15)
+            response = self.api.get(url, timeout=15) if self.api else self.session.get(url, timeout=15)
             
             # Log API call theo System Instruction
             self.log('debug', f"Response status: {response.status_code}", function_name)
@@ -1413,12 +1445,29 @@ class VideoDownloader:
                     
                     # Log API call theo System Instruction
                     self.log('info', f"Đang gọi API: {api_url}")
-                    response = self.session.get(api_url, timeout=15)
+                    # Thêm header để tăng khả năng thành công khi gọi web API của Douyin
+                    headers = {
+                        "Referer": user_url,
+                        "Accept": "application/json, text/plain, */*",
+                        "Accept-Language": "zh-CN,zh;q=0.9,en-US,en;q=0.8",
+                        "X-Requested-With": "XMLHttpRequest"
+                    }
+                    if self.api:
+                        response = self.api.get(api_url, timeout=15, headers=headers)
+                    else:
+                        response = self.session.get(api_url, timeout=15, headers=headers)
                     
                     # Log API response theo System Instruction
                     self.log('debug', f"API response status: {response.status_code}")
                     if response.status_code != 200:
                         self.log('warning', f"HTTP Error: {response.status_code}")
+                        # Log snippet nội dung để hỗ trợ debug (không log toàn bộ để tránh rò rỉ dữ liệu lớn)
+                        try:
+                            snippet = response.text[:200] if hasattr(response, 'text') else ''
+                            if snippet:
+                                self.log('debug', f"Response snippet: {snippet}")
+                        except Exception:
+                            pass
                         self.log('error', f"API call failed: {api_url} - Status {response.status_code}")
                         error_count += 1
                         import time
@@ -1486,13 +1535,14 @@ class VideoDownloader:
                                 if len(video_urls) % 10 == 0:
                                     self.log('debug', f"Video {aweme_id} (get_all_videos_from_user): orientation={orientation} (width={width}, height={height})", function_name)
                             
+                            # Khởi tạo biến video_url trước khi sử dụng trong điều kiện log để tránh UnboundLocalError
+                            video_url = None
                             # Log thông tin video để debug (giảm log frequency để tối ưu I/O - theo System Instruction 6)
-                            # Chỉ log mỗi 10 video hoặc video quan trọng để giảm I/O operations
-                            if len(video_urls) % 10 == 0 or not video_url:
+                            # Chỉ log mỗi 10 video hoặc khi chưa xác định video_url để giảm I/O operations
+                            if len(video_urls) % 10 == 0 or video_url is None:
                                 self.log('info', f"Video {len(video_urls)+1}: aweme_id={aweme_id}, orientation={orientation} ({width}x{height}), author={author_nickname} (@{author_unique_id}), desc={desc}", function_name)
                             
                             # Thử lấy direct video URL trước (giống như douyin-video-links1.txt)
-                            video_url = None
                             
                             if video_data:
                                 # Thử play_addr trước
@@ -1722,7 +1772,13 @@ class VideoDownloader:
             # Log API call theo System Instruction 4.4 - log request + status code
             self.log('info', f"Đang gửi request để tải video: {video_url[:100]}...", function_name)
             download_timeout = timeout_settings.get('download_timeout_seconds', 300)
-            response = self.session.get(video_url, stream=True, timeout=download_timeout)
+            # Một số video yêu cầu header đầy đủ (UA, Accept video, Referer) để trả dữ liệu
+            video_headers = {
+                "Referer": "https://www.douyin.com/",
+                "Accept": "video/mp4,video/*;q=0.9,application/octet-stream;q=0.8,*/*;q=0.5",
+                "Accept-Language": "zh-CN,zh;q=0.9,en-US,en;q=0.8",
+            }
+            response = self.api.get(video_url, stream=True, timeout=download_timeout, headers=video_headers) if self.api else self.session.get(video_url, stream=True, timeout=download_timeout, headers=video_headers)
             response.raise_for_status()
             
             # Log API response theo System Instruction 4.4
