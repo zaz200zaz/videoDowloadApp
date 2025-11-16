@@ -103,6 +103,8 @@ class EditService:
 			pattern = os.path.join(self.input_folder, "**", "*.mp4")
 			files = glob.glob(pattern, recursive=True)
 			files = [f for f in files if os.path.isfile(f)]
+			# Chuẩn hoá tuyệt đối để không phụ thuộc working directory khi gọi FFmpeg
+			files = [os.path.abspath(f) for f in files]
 			write_log("INFO", function, f"Đã quét file .mp4: {len(files)}", self.logger)
 			try:
 				head = [os.path.basename(p) for p in files[:5]]
@@ -119,6 +121,44 @@ class EditService:
 			os.makedirs(self.output_folder, exist_ok=True)
 			
 			editor = VideoEditor()
+			# Chuẩn hoá đường dẫn nền tuyệt đối
+			background_abs = os.path.abspath(self.background_path)
+			# Chuẩn bị nguồn audio nếu có
+			audio_source_path = self.config.get("audio_source_path") or ""
+			audio_library_dir = self.config.get("audio_library_dir") or os.path.join(self.output_folder, "..", "..", "assets", "audio")
+			audio_extract_when_video = bool(self.config.get("audio_extract_when_video", True))
+			audio_delete_source_after_extract = bool(self.config.get("audio_delete_source_after_extract", True))
+			prepared_audio_path = ""
+			if audio_source_path:
+				try:
+					ext = os.path.splitext(audio_source_path)[1].lower()
+					audio_exts = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg"}
+					if ext in audio_exts:
+						prepared_audio_path = os.path.abspath(audio_source_path)
+						write_log("INFO", function, f"Dùng audio trực tiếp: {prepared_audio_path}", self.logger)
+					else:
+						if audio_extract_when_video:
+							base = os.path.splitext(os.path.basename(audio_source_path))[0]
+							ok, err, out_audio = editor.extract_audio(audio_source_path, os.path.abspath(audio_library_dir), base_name=base)
+							if ok and out_audio:
+								prepared_audio_path = out_audio
+								write_log("INFO", function, f"Đã tách audio vào kho: {prepared_audio_path}", self.logger)
+								# Ghi nhớ đường dẫn này để tái sử dụng (ghi luôn vào config để các file dùng chung)
+								self.config["audio_source_path"] = prepared_audio_path
+								if audio_delete_source_after_extract:
+                                    # Xoá video nguồn tách âm nếu được yêu cầu
+									try:
+										os.remove(audio_source_path)
+										write_log("INFO", function, f"Đã xoá file nguồn sau khi tách audio: {audio_source_path}", self.logger)
+									except Exception as _e_rm:
+										write_log("WARNING", function, f"Không thể xoá file nguồn: {_e_rm}", self.logger)
+							else:
+								write_log("WARNING", function, f"Tách audio thất bại, dùng nguồn audio gốc nếu có: {err}", self.logger)
+						else:
+							write_log("INFO", function, "Không bật tách audio từ video, dùng trực tiếp media như input audio.", self.logger)
+							prepared_audio_path = os.path.abspath(audio_source_path)
+				except Exception as e:
+					write_log("ERROR", function, f"Lỗi chuẩn bị audio: {e}", self.logger, exc_info=True)
 			success = 0
 			failed = 0
 			skipped = 0
@@ -134,11 +174,15 @@ class EditService:
 						write_log("INFO", function, f"Skip (đã tồn tại): {dst}", self.logger)
 						return {"success": True, "skipped": True, "input": src, "output": dst}
 					
+					# Gộp config: truyền audio đã chuẩn bị (nếu có)
+					cfg = dict(self.config)
+					if prepared_audio_path:
+						cfg["audio_source_path"] = prepared_audio_path
 					result = editor.process_one(
 						input_video=src,
-						background_path=self.background_path,
+						background_path=background_abs,
 						output_path=dst,
-						config=self.config
+						config=cfg
 					)
 					return result
 				except Exception as e:

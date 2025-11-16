@@ -17,10 +17,10 @@
     "enable_skip_slow_videos": true,
     "chunk_size": 8192,
     "edit_background_path": "C:/Users/trant/Downloads/IMG_9969.jpeg",
-    "edit_pos_x": 281,
-    "edit_pos_y": 326,
-    "edit_width": 383,
-    "edit_height": 718,
+    "edit_pos_x": 270,
+    "edit_pos_y": 304,
+    "edit_width": 370,
+    "edit_height": 681,
     "edit_keep_ratio": true,
     "edit_ignore_scale": false,
     "edit_force_169": false,
@@ -28,6 +28,12 @@
     "edit_min_size": 4,
     "edit_resize_speed": 1,
     "edit_input_folder": "downloads",
-    "edit_output_folder": "downloads/edited"
+    "edit_output_folder": "downloads/edited",
+    "edit_audio_path": "C:/Users/trant/Downloads/capcut.mp3",
+    "edit_audio_start": 0.0,
+    "edit_audio_loop": true,
+    "edit_audio_volume": 100,
+    "edit_audio_library_dir": "assets/audio",
+    "edit_audio_extract": true
   }
 }

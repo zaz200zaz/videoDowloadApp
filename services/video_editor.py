@@ -68,6 +68,44 @@ class VideoEditor:
 			write_log("ERROR", function, f"Lỗi khi kiểm tra ffmpeg: {e}", self.logger, exc_info=True)
 			return False, str(e)
 	
+	def extract_audio(self, input_media_path: str, output_dir: str, base_name: Optional[str] = None) -> Tuple[bool, Optional[str], Optional[str]]:
+		"""
+		Tách audio từ file media (video/audio) và lưu vào thư mục kho.
+		
+		Returns:
+			(success, error, audio_path)
+		"""
+		function = "VideoEditor.extract_audio"
+		try:
+			ok, err = self._ensure_ffmpeg()
+			if not ok:
+				return False, err, None
+			os.makedirs(output_dir, exist_ok=True)
+			if not base_name:
+				base_name = os.path.splitext(os.path.basename(input_media_path))[0]
+			# Ưu tiên xuất m4a (AAC) để tương thích rộng
+			out_name = f"{base_name}_audio.m4a"
+			out_abs = os.path.abspath(os.path.join(output_dir, out_name))
+			cmd = ["ffmpeg", "-y", "-i", input_media_path, "-vn", "-acodec", "aac", out_name]
+			try:
+				debug_str = " ".join(shlex.quote(p) for p in cmd)
+			except Exception:
+				debug_str = " ".join(cmd)
+			write_log("INFO", function, f"Tách audio: {debug_str}", self.logger)
+			proc = subprocess.run(cmd, shell=False, cwd=output_dir, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="ignore")
+			if proc.returncode != 0:
+				stderr_snippet = (proc.stderr or "")[-400:]
+				write_log("ERROR", function, f"Tách audio thất bại: {stderr_snippet}", self.logger)
+				return False, f"extract_audio_failed: {stderr_snippet}", None
+			if not os.path.exists(out_abs):
+				write_log("ERROR", function, "File audio không tồn tại sau khi tách", self.logger)
+				return False, "no_audio_output", None
+			write_log("INFO", function, f"Đã tách và lưu audio: {out_abs}", self.logger)
+			return True, None, out_abs
+		except Exception as e:
+			write_log("ERROR", function, f"Lỗi tách audio: {e}", self.logger, exc_info=True)
+			return False, str(e), None
+	
 	def _read_background_size(self, background_path: str) -> Tuple[int, int]:
 		"""
 		Đọc kích thước background từ file ảnh.
@@ -243,6 +281,10 @@ class VideoEditor:
 			if not ok:
 				return {"success": False, "error": err, "input": input_video, "output": None}
 			
+			# Chuẩn hoá đường dẫn tuyệt đối cho input/background
+			input_video_abs = os.path.abspath(input_video)
+			background_abs = os.path.abspath(background_path)
+
 			position = config.get("position", {"x": 0, "y": 0})
 			size = config.get("size", {"width": 720, "height": 1280})
 			keep_ratio = bool(config.get("keep_ratio", True))
@@ -257,9 +299,71 @@ class VideoEditor:
 				self._rotation_override = 0
 			
 			cmd_str, workdir = self.build_ffmpeg_command(
-				input_video, background_path, output_path,
+				input_video_abs, background_abs, output_path,
 				position, size, keep_ratio, pad_color, bitrate, preset
 			)
+			
+			# Thay thế âm thanh nếu được cấu hình
+			try:
+				audio_path = config.get("audio_source_path") or ""
+				audio_start = float(config.get("audio_start_sec", 0.0) or 0.0)
+				audio_loop = bool(config.get("audio_loop", True))
+				vol_percent = int(config.get("audio_volume_percent", 100))
+				vol_percent = max(0, min(100, vol_percent))
+				vol_factor = max(0.0, float(vol_percent) / 100.0)
+			except Exception:
+				audio_path = ""
+				audio_start = 0.0
+				audio_loop = True
+				vol_factor = 1.0
+			
+			cmd_list = getattr(self, "_last_cmd_list", None)
+			if audio_path and isinstance(cmd_list, list):
+				try:
+					audio_path_abs = os.path.abspath(audio_path)
+					# Tìm vị trí trước -filter_complex để chèn input audio (thành input #2)
+					if "-filter_complex" in cmd_list:
+						fc_idx = cmd_list.index("-filter_complex")
+					else:
+						fc_idx = len(cmd_list)
+					audio_input_parts = []
+					if audio_start > 0:
+						audio_input_parts += ["-ss", str(audio_start)]
+					if audio_loop:
+						audio_input_parts += ["-stream_loop", "-1"]
+					audio_input_parts += ["-i", audio_path_abs]
+					# Chèn vào cmd_list
+					cmd_list = cmd_list[:fc_idx] + audio_input_parts + cmd_list[fc_idx:]
+					# Cập nhật mapping audio: từ 1:a? -> 2:a?
+					try:
+						map_idx = cmd_list.index("1:a?")
+						# phần tử trước nó phải là "-map"
+						if map_idx > 0 and cmd_list[map_idx - 1] == "-map":
+							cmd_list[map_idx] = "2:a?"
+					except ValueError:
+						# nếu không tìm thấy, thêm map cho audio mới
+						insert_pos = len(cmd_list) - 1
+						cmd_list[insert_pos:insert_pos] = ["-map", "2:a?"]
+					# Thêm filter âm lượng cho audio (đảm bảo cặp -filter:a và giá trị liền kề trước output)
+					out_idx = len(cmd_list) - 1  # tên file output
+					if "-filter:a" in cmd_list:
+						fa_idx = cmd_list.index("-filter:a")
+						# Nếu có, cập nhật giá trị ngay sau nó; nếu thiếu thì chèn giá trị
+						if fa_idx + 1 < len(cmd_list) and not cmd_list[fa_idx + 1].startswith("-"):
+							cmd_list[fa_idx + 1] = f"volume={vol_factor:.3f}"
+						else:
+							cmd_list.insert(fa_idx + 1, f"volume={vol_factor:.3f}")
+					else:
+						# Chèn cặp ngay trước output để không bị tách rời bởi các option khác
+						cmd_list[out_idx:out_idx] = ["-filter:a", f"volume={vol_factor:.3f}"]
+					# Đảm bảo -shortest tồn tại để dừng theo video (audio loop vô hạn)
+					if "-shortest" not in cmd_list:
+						cmd_list.insert(len(cmd_list) - 1, "-shortest")
+					# Ghi log cấu hình audio
+					write_log("DEBUG", function, f"Apply external audio: path={audio_path}, start={audio_start}, loop={audio_loop}, volume={vol_factor:.3f}", self.logger)
+					self._last_cmd_list = cmd_list
+				except Exception as _e_audio:
+					write_log("WARNING", function, f"Không thể áp dụng audio mới: {_e_audio}", self.logger, exc_info=True)
 			
 			# Đảm bảo thư mục output tồn tại (dùng absolute để nhất quán với workdir)
 			out_abs = os.path.abspath(output_path)

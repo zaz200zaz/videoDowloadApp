@@ -230,6 +230,42 @@ class EditVideoScreen:
             tk.Label(row4c, text="Giới hạn log hiển thị:", bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=(15,5))
             self.ui_log_max_lines_var = tk.IntVar(value=2000)
             tk.Spinbox(row4c, from_=500, to=20000, increment=500, textvariable=self.ui_log_max_lines_var, width=7).pack(side=tk.LEFT)
+
+            # Hàng 4d: Âm thanh
+            row4d = tk.LabelFrame(config_frame, text="Âm thanh", bg=self.frame.cget('bg'))
+            row4d.pack(fill=tk.X, pady=5, padx=2)
+            try:
+                cm = CookieManager()
+                last_audio = cm.get_setting("edit_audio_path", "")
+                last_astart = float(cm.get_setting("edit_audio_start", 0.0) or 0.0)
+                last_aloop = bool(cm.get_setting("edit_audio_loop", True))
+                last_avol = int(cm.get_setting("edit_audio_volume", 100) or 100)
+                last_alib = cm.get_setting("edit_audio_library_dir", "assets/audio")
+                last_aextract = bool(cm.get_setting("edit_audio_extract", True))
+            except Exception:
+                last_audio, last_astart, last_aloop, last_avol, last_alib, last_aextract = "", 0.0, True, 100, "assets/audio", True
+            tk.Label(row4d, text="Nguồn âm thanh (audio/video):", bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=5)
+            self.audio_source_var = tk.StringVar(value=last_audio)
+            tk.Entry(row4d, textvariable=self.audio_source_var, width=35).pack(side=tk.LEFT, padx=5)
+            tk.Button(row4d, text="Chọn...", command=self._choose_audio_file).pack(side=tk.LEFT, padx=5)
+            tk.Label(row4d, text="Bắt đầu(s):", bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=(10,5))
+            self.audio_start_var = tk.DoubleVar(value=last_astart)
+            tk.Spinbox(row4d, from_=0.0, to=3600.0, increment=0.1, textvariable=self.audio_start_var, width=6).pack(side=tk.LEFT)
+            self.audio_loop_var = tk.BooleanVar(value=last_aloop)
+            tk.Checkbutton(row4d, text="Lặp âm thanh", variable=self.audio_loop_var, bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=(10,5))
+            tk.Label(row4d, text="Âm lượng:", bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=(10,5))
+            self.audio_volume_var = tk.IntVar(value=last_avol)
+            tk.Scale(row4d, from_=0, to=100, orient=tk.HORIZONTAL, variable=self.audio_volume_var, length=100).pack(side=tk.LEFT)
+
+            row4e = tk.Frame(config_frame, bg=self.frame.cget('bg'))
+            row4e.pack(fill=tk.X, pady=5)
+            self.audio_extract_var = tk.BooleanVar(value=last_aextract)
+            tk.Checkbutton(row4e, text="Tách và lưu kho nếu nguồn là video", variable=self.audio_extract_var, bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=5)
+            tk.Label(row4e, text="Kho âm thanh:", bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=(10,5))
+            self.audio_library_var = tk.StringVar(value=last_alib)
+            tk.Entry(row4e, textvariable=self.audio_library_var, width=30).pack(side=tk.LEFT, padx=5)
+            tk.Button(row4e, text="Chọn thư mục...", command=self._choose_audio_library_dir).pack(side=tk.LEFT, padx=5)
+            tk.Button(row4e, text="Áp dụng âm thanh mới", command=self._apply_audio_selection).pack(side=tk.LEFT, padx=10)
             
             # Hàng 5: Threads, bitrate, preset, suffix, skip
             row5 = tk.Frame(config_frame, bg=self.frame.cget('bg'))
@@ -621,6 +657,44 @@ class EditVideoScreen:
             return "break"
         except Exception:
             return "break"
+
+    def _choose_audio_file(self):
+        try:
+            from tkinter import filedialog
+            path = filedialog.askopenfilename(title="Chọn audio/video", filetypes=[("Audio/Video", "*.mp3;*.wav;*.m4a;*.aac;*.flac;*.ogg;*.mp4;*.mov;*.mkv;*.avi"), ("All files", "*.*")])
+            if path:
+                self.audio_source_var.set(path)
+                self._append_log(f"[audio] Đã chọn nguồn: {path}")
+        except Exception as e:
+            try:
+                self._append_log(f"[audio] Lỗi chọn file: {e}")
+            except Exception:
+                pass
+
+    def _choose_audio_library_dir(self):
+        try:
+            from tkinter import filedialog
+            path = filedialog.askdirectory(title="Chọn thư mục kho âm thanh")
+            if path:
+                self.audio_library_var.set(path)
+                self._append_log(f"[audio] Kho âm thanh: {path}")
+        except Exception as e:
+            try:
+                self._append_log(f"[audio] Lỗi chọn thư mục: {e}")
+            except Exception:
+                pass
+
+    def _apply_audio_selection(self):
+        try:
+            src = self.audio_source_var.get().strip() if hasattr(self, "audio_source_var") else ""
+            astart = float(self.audio_start_var.get()) if hasattr(self, "audio_start_var") else 0.0
+            aloop = bool(self.audio_loop_var.get()) if hasattr(self, "audio_loop_var") else True
+            avol = int(self.audio_volume_var.get()) if hasattr(self, "audio_volume_var") else 100
+            aextract = bool(self.audio_extract_var.get()) if hasattr(self, "audio_extract_var") else True
+            alib = self.audio_library_var.get().strip() if hasattr(self, "audio_library_var") else ""
+            self._append_log(f"[audio_apply] src={src or '(none)'} start={astart} loop={aloop} vol={avol}% extract_when_video={aextract} lib={alib or '(default)'}")
+        except Exception:
+            pass
 
     # ========== PREVIEW & DRAG ==========
     def _refresh_preview(self):
@@ -1248,7 +1322,15 @@ class EditVideoScreen:
             "bitrate": self.bitrate_var.get().strip() or "2500k",
             "preset": self.preset_var.get().strip() or "medium",
             "output_suffix": self.suffix_var.get(),
-            "skip_existing": bool(self.skip_existing_var.get())
+            "skip_existing": bool(self.skip_existing_var.get()),
+            # Audio config
+            "audio_source_path": self.audio_source_var.get().strip() if hasattr(self, "audio_source_var") else "",
+            "audio_start_sec": float(self.audio_start_var.get()) if hasattr(self, "audio_start_var") else 0.0,
+            "audio_loop": bool(self.audio_loop_var.get()) if hasattr(self, "audio_loop_var") else True,
+            "audio_volume_percent": int(self.audio_volume_var.get()) if hasattr(self, "audio_volume_var") else 100,
+            "audio_extract_when_video": bool(self.audio_extract_var.get()) if hasattr(self, "audio_extract_var") else True,
+            "audio_library_dir": self.audio_library_var.get().strip() if hasattr(self, "audio_library_var") else "",
+            "audio_delete_source_after_extract": True
         }
         
         if not hasattr(self, "_controller"):
@@ -1278,6 +1360,19 @@ class EditVideoScreen:
                 cm2.set_setting("edit_background_path", bg)
                 cm2.set_setting("edit_input_folder", inp)
                 cm2.set_setting("edit_output_folder", out)
+                # Lưu audio config
+                if hasattr(self, "audio_source_var"):
+                    cm2.set_setting("edit_audio_path", self.audio_source_var.get().strip())
+                if hasattr(self, "audio_start_var"):
+                    cm2.set_setting("edit_audio_start", float(self.audio_start_var.get()))
+                if hasattr(self, "audio_loop_var"):
+                    cm2.set_setting("edit_audio_loop", bool(self.audio_loop_var.get()))
+                if hasattr(self, "audio_volume_var"):
+                    cm2.set_setting("edit_audio_volume", int(self.audio_volume_var.get()))
+                if hasattr(self, "audio_library_var"):
+                    cm2.set_setting("edit_audio_library_dir", self.audio_library_var.get().strip())
+                if hasattr(self, "audio_extract_var"):
+                    cm2.set_setting("edit_audio_extract", bool(self.audio_extract_var.get()))
             except Exception:
                 pass
         # Ghi chú nếu bỏ qua scale
