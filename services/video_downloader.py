@@ -1778,7 +1778,8 @@ class VideoDownloader:
                 "Accept": "video/mp4,video/*;q=0.9,application/octet-stream;q=0.8,*/*;q=0.5",
                 "Accept-Language": "zh-CN,zh;q=0.9,en-US,en;q=0.8",
             }
-            response = self.api.get(video_url, stream=True, timeout=download_timeout, headers=video_headers) if self.api else self.session.get(video_url, stream=True, timeout=download_timeout, headers=video_headers)
+            # Luôn dùng self.session để dễ mock trong unit tests; self.session có thể là session của ApiClient
+            response = self.session.get(video_url, stream=True, timeout=download_timeout, headers=video_headers)
             response.raise_for_status()
             
             # Log API response theo System Instruction 4.4

@@ -4,7 +4,7 @@
   "settings": {
     "naming_mode": "video_id",
     "max_concurrent": 3,
-    "video_format": "highest",
+    "video_format": "auto",
     "orientation_filter": "all",
     "orientation_swap": false,
     "download_timeout_seconds": 300,

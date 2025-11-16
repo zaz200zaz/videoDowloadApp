@@ -1,0 +1,159 @@
+"""
+Edit Service
+Quản lý xử lý hàng loạt video: scan, đa luồng, gọi VideoEditor, progress & logging.
+"""
+
+import os
+import glob
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable, Dict, List, Optional
+from utils.log_helper import get_logger, write_log
+from services.video_editor import VideoEditor
+
+
+class EditService:
+	"""
+	Quản lý batch edit video.
+	
+	Args:
+		background_path: Đường dẫn ảnh nền
+		input_folder: Thư mục nguồn chứa các .mp4
+		output_folder: Thư mục output
+		config: Cấu hình xử lý (position, size, keep_ratio, pad_color, bitrate, preset, skip_existing, output_suffix)
+		threads: Số luồng xử lý song song
+		progress_cb: callback(progress_float, current, total, message)
+		result_cb: callback(result_dict)
+		complete_cb: callback()
+	"""
+	
+	def __init__(
+		self,
+		background_path: str,
+		input_folder: str,
+		output_folder: str,
+		config: Dict,
+		threads: int = 4,
+		progress_cb: Optional[Callable[[float, int, int, str], None]] = None,
+		result_cb: Optional[Callable[[Dict], None]] = None,
+		complete_cb: Optional[Callable[[], None]] = None,
+	):
+		self.logger = get_logger("EditService")
+		self.background_path = background_path
+		self.input_folder = input_folder
+		self.output_folder = output_folder
+		self.config = config or {}
+		self.threads = max(1, min(int(threads or 1), 8))
+		self.progress_cb = progress_cb
+		self.result_cb = result_cb
+		self.complete_cb = complete_cb
+		self._should_stop = False
+	
+	def stop(self):
+		"""Yêu cầu dừng (không hủy job đang chạy, ngăn job mới)."""
+		self._should_stop = True
+	
+	def _make_output_path(self, src_path: str) -> str:
+		"""
+		Tạo output path từ file nguồn, thêm hậu tố nếu cấu hình.
+		"""
+		suffix = self.config.get("output_suffix", "_edited") or ""
+		base = os.path.splitext(os.path.basename(src_path))[0]
+		filename = f"{base}{suffix}.mp4" if suffix else f"{base}.mp4"
+		return os.path.join(self.output_folder, filename)
+	
+	def run(self) -> Dict:
+		"""
+		Chạy batch edit. Trả về thống kê tổng hợp.
+		"""
+		function = "EditService.run"
+		try:
+			write_log("INFO", function, "Bắt đầu batch edit", self.logger)
+			
+			# Scan input files
+			pattern = os.path.join(self.input_folder, "**", "*.mp4")
+			files = glob.glob(pattern, recursive=True)
+			files = [f for f in files if os.path.isfile(f)]
+			
+			total = len(files)
+			if total == 0:
+				write_log("WARNING", function, f"Không tìm thấy file .mp4 trong: {self.input_folder}", self.logger)
+				return {"total": 0, "success": 0, "failed": 0, "skipped": 0}
+			
+			os.makedirs(self.output_folder, exist_ok=True)
+			
+			editor = VideoEditor()
+			success = 0
+			failed = 0
+			skipped = 0
+			done = 0
+			
+			def process_one(src: str) -> Dict:
+				try:
+					if self._should_stop:
+						return {"success": False, "error": "Stopped", "input": src, "output": None}
+					
+					dst = self._make_output_path(src)
+					if os.path.exists(dst) and self.config.get("skip_existing", True):
+						write_log("INFO", function, f"Skip (đã tồn tại): {dst}", self.logger)
+						return {"success": True, "skipped": True, "input": src, "output": dst}
+					
+					result = editor.process_one(
+						input_video=src,
+						background_path=self.background_path,
+						output_path=dst,
+						config=self.config
+					)
+					return result
+				except Exception as e:
+					write_log("ERROR", function, f"Lỗi khi xử lý {src}: {e}", self.logger, exc_info=True)
+					return {"success": False, "error": str(e), "input": src, "output": None}
+			
+			with ThreadPoolExecutor(max_workers=self.threads) as ex:
+				future_map = {ex.submit(process_one, f): f for f in files}
+				for fut in as_completed(future_map):
+					src = future_map[fut]
+					try:
+						res = fut.result()
+					except Exception as e:
+						write_log("ERROR", function, f"Worker lỗi: {e}", self.logger, exc_info=True)
+						res = {"success": False, "error": str(e), "input": src, "output": None}
+					
+					done += 1
+					if res.get("success"):
+						if res.get("skipped"):
+							skipped += 1
+						else:
+							success += 1
+					else:
+						failed += 1
+					
+					if self.result_cb:
+						try:
+							self.result_cb(res)
+						except Exception as e:
+							write_log("ERROR", function, f"result_cb error: {e}", self.logger, exc_info=True)
+					
+					progress = (done / total) * 100.0
+					msg = f"Đang xử lý {done}/{total}"
+					if self.progress_cb:
+						try:
+							self.progress_cb(progress, done, total, msg)
+						except Exception as e:
+							write_log("ERROR", function, f"progress_cb error: {e}", self.logger, exc_info=True)
+			
+			summary = {"total": total, "success": success, "failed": failed, "skipped": skipped}
+			write_log("INFO", function, f"Hoàn tất batch: {summary}", self.logger)
+			
+			if self.complete_cb:
+				try:
+					self.complete_cb()
+				except Exception as e:
+					write_log("ERROR", function, f"complete_cb error: {e}", self.logger, exc_info=True)
+			
+			return summary
+		
+		except Exception as e:
+			write_log("ERROR", function, f"Lỗi batch: {e}", self.logger, exc_info=True)
+			return {"total": 0, "success": 0, "failed": 0, "skipped": 0, "error": str(e)}
+
+
