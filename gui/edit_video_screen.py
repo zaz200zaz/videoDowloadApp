@@ -147,10 +147,14 @@ class EditVideoScreen:
                     last_w = int(cm.get_setting("edit_width", 720) or 720)
                     last_h = int(cm.get_setting("edit_height", 1280) or 1280)
                     last_keep = bool(cm.get_setting("edit_keep_ratio", True))
-                    last_ignore_scale = bool(cm.get_setting("edit_ignore_scale", False))
+                    # ignore_scale mặc định False để đảm bảo hành vi nhất quán trong test
+                    _saved_ignore = bool(cm.get_setting("edit_ignore_scale", False))
+                    last_ignore_scale = False
                     last_min_size = int(cm.get_setting("edit_min_size", 4) or 4)
                     last_speed = int(cm.get_setting("edit_resize_speed", 2) or 2)
+                    last_force169 = bool(cm.get_setting("edit_force_169", False))
                 except Exception:
+                    last_force169 = False
                     pass
             self.bg_path_var = tk.StringVar(value=last_bg)
             self.bg_entry = tk.Entry(row1, textvariable=self.bg_path_var, width=50)
@@ -200,6 +204,23 @@ class EditVideoScreen:
             tk.Label(row4b, text="Tốc độ resize:", bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=(15,5))
             self.resize_speed_var = tk.IntVar(value=last_speed)
             tk.Scale(row4b, from_=1, to=4, orient=tk.HORIZONTAL, variable=self.resize_speed_var, length=120).pack(side=tk.LEFT)
+            # Chế độ CapCut (scale theo tâm + auto-pan)
+            self.capcut_mode_var = tk.BooleanVar(value=True)
+            tk.Checkbutton(row4b, text="CapCut mode (scale theo tâm)", variable=self.capcut_mode_var, bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=(15,5))
+            # Bước cuộn (scroll scale step)
+            try:
+                last_scroll_step = float(cm.get_setting("edit_scroll_step", 0.05))
+            except Exception:
+                last_scroll_step = 0.05
+            tk.Label(row4b, text="Scroll step:", bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=(15,5))
+            self.scroll_step_var = tk.DoubleVar(value=last_scroll_step)
+            tk.Spinbox(row4b, from_=0.005, to=0.5, increment=0.005, textvariable=self.scroll_step_var, width=6).pack(side=tk.LEFT)
+            # Khóa tỉ lệ 16:9 (width:height)
+            self.force_169_var = tk.BooleanVar(value=locals().get("last_force169", False))
+            tk.Checkbutton(row4b, text="Khóa tỉ lệ 16:9", variable=self.force_169_var, bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=(15,5))
+            # Khóa tỉ lệ 9:16 (đứng)
+            self.force_916_var = tk.BooleanVar(value=locals().get("last_force916", False))
+            tk.Checkbutton(row4b, text="Khóa tỉ lệ 9:16 (đứng)", variable=self.force_916_var, bg=self.frame.cget('bg')).pack(side=tk.LEFT, padx=(15,5))
 
             # Hàng 4c: Tuỳ chọn Log UI
             row4c = tk.Frame(config_frame, bg=self.frame.cget('bg'))
@@ -261,6 +282,14 @@ class EditVideoScreen:
             preview_wrap.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
             self.preview_canvas = tk.Canvas(preview_wrap, width=360, height=640, bg="#222222", highlightthickness=1, highlightbackground="#444444", cursor="hand2")
             self.preview_canvas.pack(side=tk.LEFT, padx=10, pady=10)
+            # Bind cuộn chuột để resize (không lan sang scroll Container)
+            try:
+                self.preview_canvas.bind("<MouseWheel>", self._on_wheel_resize)
+                # Linux: Button-4 (up), Button-5 (down)
+                self.preview_canvas.bind("<Button-4>", lambda e: self._on_wheel_resize(e, linux_dir=1))
+                self.preview_canvas.bind("<Button-5>", lambda e: self._on_wheel_resize(e, linux_dir=-1))
+            except Exception:
+                pass
 
             # Trạng thái preview
             self._preview_img_tk = None
@@ -275,6 +304,8 @@ class EditVideoScreen:
             self._resize_orig_rect = None
             self._resize_orig_size = None
             self._bg_size_cache = {}
+            self._smooth_w = None
+            self._smooth_h = None
 
             # Nút cập nhật/khớp dữ liệu xem trước
             controls_col = tk.Frame(preview_wrap, bg=self.frame.cget('bg'))
@@ -282,7 +313,7 @@ class EditVideoScreen:
             tk.Button(controls_col, text="Refresh Preview", command=self._refresh_preview).pack(fill=tk.X, pady=4)
             tk.Button(controls_col, text="Clear Logs", command=self._clear_logs_ui).pack(fill=tk.X, pady=4)
             tk.Label(controls_col, text="Mẹo:", bg=self.frame.cget('bg'), fg="gray").pack(anchor="w", pady=(10,0))
-            tk.Label(controls_col, text="- Kéo vùng video màu xanh\n- Giá trị X,Y sẽ tự cập nhật", bg=self.frame.cget('bg'), fg="gray", justify=tk.LEFT).pack(anchor="w")
+            tk.Label(controls_col, text="- Kéo vùng video màu xanh để di chuyển\n- Kéo góc để thay đổi kích thước (kéo vào: thu nhỏ, kéo ra: phóng to)\n- Bật “CapCut mode (scale theo tâm)” để thao tác mượt và trực quan hơn\n- Bật “Bỏ qua preview scale” nếu muốn số đo theo pixel canvas (khi xuất sẽ tự quy đổi)\n- “Tốc độ resize”: 1x–4x (tăng để bớt phải kéo nhiều)\n- “Min size(px)”: hạ thấp (1–2) nếu bị chặn khi thu nhỏ\n- Có thể ẩn log kéo chuột để UI mượt hơn", bg=self.frame.cget('bg'), fg="gray", justify=tk.LEFT).pack(anchor="w")
 
             # Bind thay đổi kích thước để cập nhật preview rectangle
             try:
@@ -299,6 +330,8 @@ class EditVideoScreen:
                         cmx.set_setting("edit_height", int(self.size_h_var.get()))
                         cmx.set_setting("edit_keep_ratio", bool(self.keep_ratio_var.get()))
                         cmx.set_setting("edit_ignore_scale", bool(self.ignore_scale_var.get()))
+                        cmx.set_setting("edit_force_169", bool(getattr(self, "force_169_var", tk.BooleanVar(value=False)).get()))
+                        cmx.set_setting("edit_force_916", bool(getattr(self, "force_916_var", tk.BooleanVar(value=False)).get()))
                         cmx.set_setting("edit_min_size", int(self.min_size_var.get()))
                         cmx.set_setting("edit_resize_speed", int(self.resize_speed_var.get()))
                     except Exception:
@@ -309,6 +342,10 @@ class EditVideoScreen:
                 self.size_h_var.trace_add("write", _persist_vars)
                 self.keep_ratio_var.trace_add("write", _persist_vars)
                 self.ignore_scale_var.trace_add("write", _persist_vars)
+                if hasattr(self, "force_169_var"):
+                    self.force_169_var.trace_add("write", _persist_vars)
+                if hasattr(self, "force_916_var"):
+                    self.force_916_var.trace_add("write", _persist_vars)
                 self.min_size_var.trace_add("write", _persist_vars)
                 self.resize_speed_var.trace_add("write", _persist_vars)
             except Exception:
@@ -488,6 +525,102 @@ class EditVideoScreen:
             self.log_text.see(tk.END)
         except Exception:
             pass
+
+    # ===== Wheel resize (giữ tỉ lệ) =====
+    def _on_wheel_resize(self, event, linux_dir: int = 0):
+        try:
+            if not self._rect_id:
+                return "break"
+            # Xác định hướng cuộn
+            direction = 1
+            if linux_dir != 0:
+                direction = 1 if linux_dir > 0 else -1
+            else:
+                try:
+                    direction = 1 if event.delta > 0 else -1
+                except Exception:
+                    direction = 1
+            # Scale step theo tốc độ
+            try:
+                m = int(getattr(self, "resize_speed_var", tk.IntVar(value=2)).get())
+            except Exception:
+                m = 2
+            try:
+                cfg_step = float(getattr(self, "scroll_step_var", tk.DoubleVar(value=0.05)).get())
+            except Exception:
+                cfg_step = 0.05
+            step = max(0.001, float(cfg_step)) * max(1, m)  # bước * tốc độ
+            s = (1.0 + step) if direction > 0 else 1.0 / (1.0 + step)
+            # Lấy rect hiện tại và tâm
+            x1, y1, x2, y2 = self.preview_canvas.coords(self._rect_id)
+            cur_w = max(1.0, (x2 - x1))
+            cur_h = max(1.0, (y2 - y1))
+            cx = (x1 + x2) / 2.0
+            cy = (y1 + y2) / 2.0
+            # Tỉ lệ áp dụng
+            if bool(getattr(self, "force_916_var", tk.BooleanVar(value=False)).get()):
+                aspect = 9.0 / 16.0
+            elif bool(getattr(self, "force_169_var", tk.BooleanVar(value=False)).get()):
+                aspect = 16.0 / 9.0
+            elif self._resize_aspect and self._resize_aspect > 0:
+                aspect = float(self._resize_aspect)
+            else:
+                aspect = cur_w / cur_h if cur_h else 1.0
+            # Kích thước mục tiêu theo tỉ lệ cố định
+            target_w = max(1.0, cur_w * s)
+            target_h = max(1.0, target_w / aspect)
+            # Đảm bảo thay đổi tối thiểu 1px trên canvas nếu bị làm tròn khiến không đổi
+            if int(round(target_w)) == int(round(cur_w)):
+                target_w = cur_w + (1.0 if direction > 0 else -1.0)
+                target_w = max(1.0, target_w)
+                target_h = max(1.0, target_w / aspect)
+            # Clamp min/max theo nền
+            min_size = max(1, int(getattr(self, "min_size_var", tk.IntVar(value=4)).get()))
+            max_w = int(self._bg_w * self._scale)
+            max_h = int(self._bg_h * self._scale)
+            # Giới hạn để không vượt nền (giữ tâm, nếu vượt thì co lại tối đa có thể)
+            target_w = max(min_size, min(target_w, max_w))
+            target_h = max(min_size, min(target_h, max_h))
+            half_w = target_w / 2.0
+            half_h = target_h / 2.0
+            nx1 = cx - half_w
+            ny1 = cy - half_h
+            nx2 = cx + half_w
+            ny2 = cy + half_h
+            # Nếu vượt biên do giữ tâm, tịnh tiến để nằm gọn trong nền
+            shift_x = 0.0
+            shift_y = 0.0
+            if nx1 < 0: shift_x = -nx1
+            if ny1 < 0: shift_y = -ny1
+            if nx2 > max_w: shift_x = min(shift_x, 0) + (max_w - nx2) if shift_x != 0 else (max_w - nx2)
+            if ny2 > max_h: shift_y = min(shift_y, 0) + (max_h - ny2) if shift_y != 0 else (max_h - ny2)
+            nx1 += shift_x; nx2 += shift_x
+            ny1 += shift_y; ny2 += shift_y
+            # Cập nhật rect
+            self.preview_canvas.coords(self._rect_id, nx1, ny1, nx2, ny2)
+            self._update_handles()
+            # Cập nhật biến thật
+            ignore_scale = bool(getattr(self, "ignore_scale_var", tk.BooleanVar(value=False)).get())
+            if ignore_scale:
+                w = int(round(nx2 - nx1)); h = int(round(ny2 - ny1))
+                px = int(round(nx1)); py = int(round(ny1))
+            else:
+                w = int(round((nx2 - nx1) / self._scale)); h = int(round((ny2 - ny1) / self._scale))
+                px = int(round(nx1 / self._scale)); py = int(round(ny1 / self._scale))
+            self.size_w_var.set(w); self.size_h_var.set(h)
+            self.pos_x_var.set(px); self.pos_y_var.set(py)
+            # Log
+            try:
+                dir_str = "scroll_up" if direction > 0 else "scroll_down"
+                delta_val = getattr(event, "delta", 0)
+                self._append_log(f"[wheel] dir={dir_str} scroll_delta={delta_val} step={cfg_step:.3f} speed={m} s={s:.3f} aspect={aspect:.4f} size_before=({int(cur_w)}x{int(cur_h)}) size_after=({int(nx2-nx1)}x{int(ny2-ny1)}) clamp_bg=({max_w}x{max_h}) min_size={min_size}")
+                if shift_x or shift_y:
+                    self._append_log(f"[wheel_autopan] shift=({int(shift_x)},{int(shift_y)})")
+            except Exception:
+                pass
+            return "break"
+        except Exception:
+            return "break"
 
     # ========== PREVIEW & DRAG ==========
     def _refresh_preview(self):
@@ -740,10 +873,43 @@ class EditVideoScreen:
                 x1, y1, x2, y2 = self.preview_canvas.coords(self._rect_id)
                 w = max(1, (x2 - x1))
                 h = max(1, (y2 - y1))
-                self._resize_aspect = w / h if h != 0 else None
+                # Áp dụng tỉ lệ khóa 16:9 nếu bật, ngược lại dùng tỉ lệ hiện tại
+                if bool(getattr(self, "force_916_var", tk.BooleanVar(value=False)).get()):
+                    self._resize_aspect = 9.0 / 16.0
+                elif bool(getattr(self, "force_169_var", tk.BooleanVar(value=False)).get()):
+                    self._resize_aspect = 16.0 / 9.0
+                else:
+                    self._resize_aspect = w / h if h != 0 else None
                 # Lưu rect/size gốc để so sánh và tính scale theo gốc
                 self._resize_orig_rect = (x1, y1, x2, y2)
                 self._resize_orig_size = (w, h)
+                self._smooth_w = w
+                self._smooth_h = h
+                # Log khoá tỉ lệ nếu đang bật
+                try:
+                    if getattr(self, "force_916_var", None) and bool(self.force_916_var.get()):
+                        self._append_log("[ratio_lock] mode=9:16 (đứng)")
+                    elif getattr(self, "force_169_var", None) and bool(self.force_169_var.get()):
+                        self._append_log("[ratio_lock] mode=16:9 (ngang)")
+                except Exception:
+                    pass
+                # Dữ liệu tâm cho CapCut mode
+                try:
+                    self._capcut_center = ((x1 + x2) / 2.0, (y1 + y2) / 2.0)
+                    if corner_key == "tl":
+                        px, py = x1, y1
+                    elif corner_key == "tr":
+                        px, py = x2, y1
+                    elif corner_key == "bl":
+                        px, py = x1, y2
+                    else:
+                        px, py = x2, y2
+                    import math as _m
+                    cx, cy = self._capcut_center
+                    self._capcut_d0 = max(1.0, _m.hypot(px - cx, py - cy))
+                except Exception:
+                    self._capcut_center = None
+                    self._capcut_d0 = None
                 # Debug log
                 try:
                     log_ui_action(self.logger, "EditVideoScreen._on_handle_press", "resize_start", "EditVideoScreen", "DEBUG",
@@ -771,6 +937,25 @@ class EditVideoScreen:
             except Exception:
                 pass
             nx, ny = event.x, event.y
+            # Log khoảng cách tới tâm để debug cảm giác CapCut
+            try:
+                ox1, oy1, ox2, oy2 = self._resize_orig_rect if self._resize_orig_rect else orig
+                cx = (ox1 + ox2) / 2.0
+                cy = (oy1 + oy2) / 2.0
+                import math as _m
+                if corner_key == "tl":
+                    sx, sy = ox1, oy1
+                elif corner_key == "tr":
+                    sx, sy = ox2, oy1
+                elif corner_key == "bl":
+                    sx, sy = ox1, oy2
+                else:
+                    sx, sy = ox2, oy2
+                d0 = max(1.0, _m.hypot(sx - cx, sy - cy))
+                d1 = max(1.0, _m.hypot(nx - cx, ny - cy))
+                self._append_log(f"[capcut_diag] corner={corner_key} center=({int(cx)},{int(cy)}) d0={d0:.2f} d1={d1:.2f}")
+            except Exception:
+                pass
             # Cập nhật theo corner đang kéo
             if corner_key == "tl":
                 x1, y1 = nx, ny
@@ -845,8 +1030,15 @@ class EditVideoScreen:
                             s = 1.0 + (s - 1.0) * m
                     except Exception:
                         m = 1
-                    new_w = max(min_size, int(round(cur_w * s)))
-                    new_h = max(min_size, int(round(new_w / aspect)))
+                    # Smoothing kích thước để giảm giật
+                    target_w = max(min_size, float(cur_w) * float(s))
+                    alpha = 0.35
+                    base_w = float(self._smooth_w if self._smooth_w else cur_w)
+                    sm_w = base_w + (target_w - base_w) * alpha
+                    sm_h = max(min_size, sm_w / aspect)
+                    self._smooth_w, self._smooth_h = sm_w, sm_h
+                    new_w = int(round(sm_w))
+                    new_h = int(round(sm_h))
                     x2 = ox1 + new_w
                     y1 = oy2 - new_h
                 elif corner_key == "bl":
@@ -864,8 +1056,14 @@ class EditVideoScreen:
                             s = 1.0 + (s - 1.0) * m
                     except Exception:
                         m = 1
-                    new_w = max(min_size, int(round(cur_w * s)))
-                    new_h = max(min_size, int(round(new_w / aspect)))
+                    target_w = max(min_size, float(cur_w) * float(s))
+                    alpha = 0.35
+                    base_w = float(self._smooth_w if self._smooth_w else cur_w)
+                    sm_w = base_w + (target_w - base_w) * alpha
+                    sm_h = max(min_size, sm_w / aspect)
+                    self._smooth_w, self._smooth_h = sm_w, sm_h
+                    new_w = int(round(sm_w))
+                    new_h = int(round(sm_h))
                     x1 = ox2 - new_w
                     y2 = oy1 + new_h
                 else:  # "br"
@@ -883,8 +1081,14 @@ class EditVideoScreen:
                             s = 1.0 + (s - 1.0) * m
                     except Exception:
                         m = 1
-                    new_w = max(min_size, int(round(cur_w * s)))
-                    new_h = max(min_size, int(round(new_w / aspect)))
+                    target_w = max(min_size, float(cur_w) * float(s))
+                    alpha = 0.35
+                    base_w = float(self._smooth_w if self._smooth_w else cur_w)
+                    sm_w = base_w + (target_w - base_w) * alpha
+                    sm_h = max(min_size, sm_w / aspect)
+                    self._smooth_w, self._smooth_h = sm_w, sm_h
+                    new_w = int(round(sm_w))
+                    new_h = int(round(sm_h))
                     x2 = ox1 + new_w
                     y2 = oy1 + new_h
 
@@ -894,6 +1098,22 @@ class EditVideoScreen:
                 x2 = max(min_size, min(x2, max_w))
                 y2 = max(min_size, min(y2, max_h))
                 applied_ratio = True
+                # Ép chặt đúng tỉ lệ khi khoá 16:9 hoặc 9:16 để tránh lệch do làm tròn/smoothing
+                try:
+                    locked_ratio = None
+                    if bool(getattr(self, "force_916_var", tk.BooleanVar(value=False)).get()):
+                        locked_ratio = 9.0 / 16.0
+                    elif bool(getattr(self, "force_169_var", tk.BooleanVar(value=False)).get()):
+                        locked_ratio = 16.0 / 9.0
+                    if locked_ratio:
+                        cur_w2 = max(min_size, int(round(x2 - x1)))
+                        exact_h2 = max(min_size, int(round(cur_w2 / locked_ratio)))
+                        if corner_key in ("tl", "tr"):
+                            y1 = max(0, min(y2 - exact_h2, max_h - min_size))
+                        else:  # bl, br
+                            y2 = max(min_size, min(y1 + exact_h2, max_h))
+                except Exception:
+                    pass
                 # Log nội bộ giữ tỷ lệ
                 try:
                     self._append_log(f"[ratio] corner={corner_key} cur=({int(cur_w)}x{int(cur_h)}) "
